@@ -529,7 +529,7 @@ jobs:
           html,body,#root{width:100% !important;height:100% !important;min-height:100% !important;background:#09090b !important}
           body{overflow:hidden !important}
           #root{display:block !important;position:relative !important}
-          .app-shell{position:fixed !important;inset:0 !important;width:100% !important;height:100% !important;min-height:100% !important;display:flex !important;visibility:visible !important;opacity:1 !important;background:#09090b !important;z-index:1 !important}
+          .app-shell{position:relative !important;inset:auto !important;width:100% !important;height:100vh !important;min-height:100vh !important;display:flex !important;visibility:visible !important;opacity:1 !important;background:#09090b !important;z-index:1 !important}
           .topbar{backdrop-filter:none !important;-webkit-backdrop-filter:none !important;background:#111113 !important}
           """)
           PY
