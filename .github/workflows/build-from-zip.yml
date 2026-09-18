@@ -456,11 +456,20 @@ jobs:
             };
             window.addEventListener('error', e => showError(e.error || e.message));
             window.addEventListener('unhandledrejection', e => showError(e.reason));
+            let started = Date.now();
             const check = () => {
               const root = document.getElementById('root');
-              if (root && root.childElementCount > 0) {
+              const app = root && root.querySelector('.app-shell');
+              if (app) {
                 overlay.remove();
                 document.getElementById('pocketpal-boot-style')?.remove();
+                return;
+              }
+              if (Date.now() - started > 6000) {
+                if (err && !err.textContent) {
+                  err.textContent = 'A interface React não criou .app-shell após 6 segundos.\n' +
+                    'Isso indica falha de inicialização do bundle/WebView.';
+                }
                 return;
               }
               setTimeout(check, 250);
@@ -472,6 +481,78 @@ jobs:
           if 'id="pocketpal-boot"' not in s and '<body' in s:
               s = s.replace('<body>', '<body>' + boot)
               p.write_text(s)
+          PY
+
+          # Make React render failures visible instead of allowing a partial root
+          # mount to make the boot overlay disappear into a black screen.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("src/main.tsx")
+          p.write_text(r'''import React from "react";
+          import ReactDOM from "react-dom/client";
+          import App from "./App";
+          import "./styles.css";
+
+          class AppErrorBoundary extends React.Component<
+            { children: React.ReactNode },
+            { error: Error | null }
+          > {
+            state = { error: null as Error | null };
+            static getDerivedStateFromError(error: Error) {
+              return { error };
+            }
+            componentDidCatch(error: Error) {
+              console.error("PocketPal UI crashed:", error);
+              const el = document.getElementById("pocketpal-boot-error");
+              if (el) el.textContent = error.stack || error.message || String(error);
+            }
+            render() {
+              if (this.state.error) {
+                const e = this.state.error;
+                return <div style={{
+                  minHeight:"100vh", boxSizing:"border-box", padding:"32px 22px",
+                  background:"#09090b", color:"#f4f4f5", fontFamily:"system-ui,sans-serif"
+                }}>
+                  <h1 style={{fontSize:"24px",margin:"0 0 10px"}}>PocketPal Local</h1>
+                  <p style={{color:"#a1a1aa"}}>A interface encontrou um erro ao iniciar.</p>
+                  <pre style={{
+                    whiteSpace:"pre-wrap", overflowWrap:"anywhere", color:"#fca5a5",
+                    fontSize:"12px", lineHeight:"1.45", padding:"14px",
+                    border:"1px solid #3f1d1d", borderRadius:"12px", background:"#151012"
+                  }}>{e.stack || e.message}</pre>
+                </div>;
+              }
+              return this.props.children;
+            }
+          }
+
+          const root = document.getElementById("root");
+          if (!root) throw new Error("PocketPal: #root não encontrado");
+          ReactDOM.createRoot(root).render(
+            <React.StrictMode>
+              <AppErrorBoundary><App /></AppErrorBoundary>
+            </React.StrictMode>
+          );
+          ''')
+          PY
+
+          # Force basic dimensions/visibility so Android WebView CSS quirks cannot
+          # collapse the application into a black viewport.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("src/styles.css")
+          s = p.read_text()
+          base = """
+          html,body,#root{width:100%;height:100%;min-height:100%;margin:0}
+          body{overflow:hidden;background:#09090b}
+          #root{display:block;position:relative;isolation:isolate}
+          .app-shell{position:relative;width:100%;height:100%;min-height:100%;overflow:hidden}
+          """
+          if "isolation:isolate" not in s:
+              s = base + "
+" + s
+          s = s.replace("@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');", "")
+          p.write_text(s)
           PY
 
           # Defensive WebView fix for the current broken Jinja/template overlay.
