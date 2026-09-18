@@ -73,7 +73,7 @@ jobs:
           s = s.replace('#include "chat.h"', '#include "chat.h"\n#include "common.h"')
           import re
           s = re.sub(
-              r'static bool decode_prompt\\(.*?\\n\\}',
+              r'static bool decode_prompt\(.*?\n\}',
               '''static bool decode_prompt(const std::string & prompt, std::vector<llama_token> & tokens) {
               const llama_vocab * vocab = llama_model_get_vocab(g_model);
               if (!vocab || prompt.empty()) return false;
@@ -354,7 +354,7 @@ jobs:
                   registerPlugin(LocalLlamaPlugin.class);
                   super.onCreate(savedInstanceState);
 
-                  WindowCompat.enableEdgeToEdge(getWindow());
+                  WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
                   getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
                   if (android.os.Build.VERSION.SDK_INT >= 29) {
                       getWindow().setNavigationBarContrastEnforced(false);
