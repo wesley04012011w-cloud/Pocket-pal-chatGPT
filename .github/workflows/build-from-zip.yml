@@ -141,7 +141,7 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: npm run android:prepare
 
-      - name: Force Java Capacitor native bridge and Android insets
+      - name: Force Java Capacitor native bridge and safe Android window layout
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
@@ -338,14 +338,9 @@ jobs:
           package dev.pocketpal.local;
 
           import android.os.Bundle;
-          import android.view.View;
           import android.view.WindowManager;
 
-          import androidx.core.graphics.Insets;
-          import androidx.core.view.ViewCompat;
           import androidx.core.view.WindowCompat;
-          import androidx.core.view.WindowInsetsCompat;
-          import androidx.core.view.WindowInsetsControllerCompat;
 
           import com.getcapacitor.BridgeActivity;
 
@@ -355,46 +350,23 @@ jobs:
                   registerPlugin(LocalLlamaPlugin.class);
                   super.onCreate(savedInstanceState);
 
-                  WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+                  // Keep the WebView in the normal Android window layout. The previous
+                  // edge-to-edge/insets controller could make a healthy React surface
+                  // appear as a completely black viewport on some WebViews.
+                  WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
                   getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
                   if (android.os.Build.VERSION.SDK_INT >= 29) {
                       getWindow().setNavigationBarContrastEnforced(false);
                   }
 
-                  WindowInsetsControllerCompat controller =
-                          WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
-                  controller.setAppearanceLightStatusBars(false);
-                  controller.setAppearanceLightNavigationBars(false);
-                  // Do not enter immersive mode at startup. A failed WebView/React
-                  // bootstrap must remain visible and debuggable instead of looking
-                  // like a completely black fullscreen app.
-                  controller.setSystemBarsBehavior(
-                          WindowInsetsControllerCompat.BEHAVIOR_DEFAULT);
-
                   if (bridge != null && bridge.getWebView() != null) {
-                      View webView = bridge.getWebView();
-                      webView.setFocusableInTouchMode(true);
-                      webView.setBackgroundColor(android.graphics.Color.rgb(9, 9, 11));
-                      webView.setAlpha(1.0f);
-
-                      ViewCompat.setOnApplyWindowInsetsListener(webView, (v, insets) -> {
-                          Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
-                          Insets bars = insets.getInsets(
-                                  WindowInsetsCompat.Type.systemBars()
-                                          | WindowInsetsCompat.Type.displayCutout());
-                          int bottom = Math.max(ime.bottom, bars.bottom);
-                          v.setPadding(bars.left, bars.top, bars.right,
-                                  insets.isVisible(WindowInsetsCompat.Type.ime()) ? bottom : 0);
-                          return insets;
-                      });
-
-                      ViewCompat.requestApplyInsets(webView);
-                      // Keep system bars available while the UI boots. The web layer
-                      // can still handle edge-to-edge/IME insets through the listener above.
+                      bridge.getWebView().setFocusableInTouchMode(true);
+                      bridge.getWebView().setBackgroundColor(android.graphics.Color.rgb(9, 9, 11));
+                      bridge.getWebView().setAlpha(1.0f);
                   }
               }
           }
-          JAVA
+
 
           # Make the web UI resilient too, especially on devices where WebView reports safe-area insets.
           python3 - <<'PY'
