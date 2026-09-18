@@ -365,12 +365,17 @@ jobs:
                           WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
                   controller.setAppearanceLightStatusBars(false);
                   controller.setAppearanceLightNavigationBars(false);
+                  // Do not enter immersive mode at startup. A failed WebView/React
+                  // bootstrap must remain visible and debuggable instead of looking
+                  // like a completely black fullscreen app.
                   controller.setSystemBarsBehavior(
-                          WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                          WindowInsetsControllerCompat.BEHAVIOR_DEFAULT);
 
                   if (bridge != null && bridge.getWebView() != null) {
                       View webView = bridge.getWebView();
                       webView.setFocusableInTouchMode(true);
+                      webView.setBackgroundColor(android.graphics.Color.rgb(9, 9, 11));
+                      webView.setAlpha(1.0f);
 
                       ViewCompat.setOnApplyWindowInsetsListener(webView, (v, insets) -> {
                           Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
@@ -384,9 +389,8 @@ jobs:
                       });
 
                       ViewCompat.requestApplyInsets(webView);
-                      controller.hide(WindowInsetsCompat.Type.systemBars());
-                      webView.postDelayed(
-                              () -> controller.hide(WindowInsetsCompat.Type.systemBars()), 350);
+                      // Keep system bars available while the UI boots. The web layer
+                      // can still handle edge-to-edge/IME insets through the listener above.
                   }
               }
           }
@@ -416,6 +420,57 @@ jobs:
                       return m.group(0)
                   return m.group(1) + ' android:windowSoftInputMode="adjustResize"' + m.group(2)
               s = re.sub(pat, add_resize, s, count=1)
+              p.write_text(s)
+          PY
+
+          # Add a visible bootstrap/error surface so a React/Vite failure cannot look
+          # like an unexplained black screen. It disappears automatically once #root
+          # receives real UI content.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("index.html")
+          s = p.read_text()
+          boot = r'''
+          <style id="pocketpal-boot-style">
+            #pocketpal-boot { position:fixed; inset:0; z-index:2147483647; display:flex;
+              align-items:center; justify-content:center; padding:24px; box-sizing:border-box;
+              background:#09090b; color:#f4f4f5; font:16px system-ui,sans-serif; }
+            #pocketpal-boot .box { max-width:520px; width:100%; border:1px solid #27272a;
+              border-radius:18px; padding:22px; background:#111113; box-sizing:border-box; }
+            #pocketpal-boot .title { font-size:22px; font-weight:700; margin-bottom:8px; }
+            #pocketpal-boot .sub { color:#a1a1aa; line-height:1.5; white-space:pre-wrap; }
+            #pocketpal-boot .err { margin-top:14px; color:#fca5a5; font-size:13px;
+              white-space:pre-wrap; overflow-wrap:anywhere; max-height:35vh; overflow:auto; }
+          </style>
+          <div id="pocketpal-boot"><div class="box">
+            <div class="title">PocketPal Local</div>
+            <div class="sub">Carregando a interface…</div>
+            <div class="err" id="pocketpal-boot-error"></div>
+          </div></div>
+          <script>
+          (() => {
+            const overlay = document.getElementById('pocketpal-boot');
+            const err = document.getElementById('pocketpal-boot-error');
+            const showError = e => {
+              if (err) err.textContent = String(e && (e.stack || e.message) || e);
+            };
+            window.addEventListener('error', e => showError(e.error || e.message));
+            window.addEventListener('unhandledrejection', e => showError(e.reason));
+            const check = () => {
+              const root = document.getElementById('root');
+              if (root && root.childElementCount > 0) {
+                overlay.remove();
+                document.getElementById('pocketpal-boot-style')?.remove();
+                return;
+              }
+              setTimeout(check, 250);
+            };
+            check();
+          })();
+          </script>
+          '''
+          if 'id="pocketpal-boot"' not in s and '<body' in s:
+              s = s.replace('<body>', '<body>' + boot)
               p.write_text(s)
           PY
 
