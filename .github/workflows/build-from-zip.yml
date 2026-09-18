@@ -71,16 +71,27 @@ jobs:
           # Use llama.cpp's common tokenizer helper instead of depending on the
           # signed return-value convention directly.
           s = s.replace('#include "chat.h"', '#include "chat.h"\n#include "common.h"')
-          import re
-          s = re.sub(
-              r'static bool decode_prompt\(.*?\n\}',
-              '''static bool decode_prompt(const std::string & prompt, std::vector<llama_token> & tokens) {
+          old_decode = '''static bool decode_prompt(const std::string &prompt, std::vector<llama_token> &tokens) {
+              const llama_vocab *vocab = llama_model_get_vocab(g_model);
+              const int32_t required = llama_tokenize(vocab, prompt.c_str(), (int32_t)prompt.size(),
+                                                       nullptr, 0, true, true);
+              if (required >= 0) return false;
+              const int32_t n = -required;
+              if (n <= 0) return false;
+              tokens.resize((size_t)n);
+              const int32_t got = llama_tokenize(vocab, prompt.c_str(), (int32_t)prompt.size(),
+                                                 tokens.data(), n, true, true);
+              return got == n;
+          }'''
+          new_decode = '''static bool decode_prompt(const std::string & prompt, std::vector<llama_token> & tokens) {
               const llama_vocab * vocab = llama_model_get_vocab(g_model);
               if (!vocab || prompt.empty()) return false;
               tokens = common_tokenize(vocab, prompt, true, true);
               return !tokens.empty();
-          }''',
-              s, count=1, flags=re.S)
+          }'''
+          if old_decode not in s:
+              raise SystemExit("decode_prompt function shape not found in project ZIP")
+          s = s.replace(old_decode, new_decode)
           s = s.replace('cp.n_batch = (uint32_t)batch;',
                         'cp.n_batch = std::max<uint32_t>((uint32_t)batch, 2048u);')
           s = s.replace('render_chat(msgs, true, true)', 'render_chat(msgs, true, false)')
