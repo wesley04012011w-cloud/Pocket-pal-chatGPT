@@ -508,6 +508,41 @@ jobs:
           ''')
           PY
 
+          # TESTE 1: isola React/WebView do App completo.
+          # Se este APK mostrar "React render OK", o WebView está saudável e o
+          # problema está no App/CSS/imports. Se continuar preto, o problema é
+          # anterior ao App (WebView/Android/Capacitor).
+          python3 - <<'PY'
+          from pathlib import Path
+          Path("src/main.tsx").write_text(r'''import React from "react";
+          import ReactDOM from "react-dom/client";
+          import "./styles.css";
+
+          const root = document.getElementById("root");
+          if (!root) throw new Error("PocketPal: #root não encontrado");
+
+          ReactDOM.createRoot(root).render(
+            <div className="app-shell" style={{
+              position:"relative", width:"100%", height:"100vh", minHeight:"100vh",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              background:"#111113", color:"#ffffff", fontFamily:"system-ui,sans-serif"
+            }}>
+              <div style={{
+                width:"min(520px, calc(100% - 32px))", padding:"28px",
+                border:"1px solid #3f3f46", borderRadius:"18px",
+                background:"#18181b", boxSizing:"border-box", textAlign:"center"
+              }}>
+                <div style={{fontSize:"28px",fontWeight:700}}>PocketPal Local</div>
+                <div style={{fontSize:"18px",marginTop:"12px"}}>React render OK</div>
+                <div style={{fontSize:"13px",color:"#a1a1aa",marginTop:"10px"}}>
+                  TESTE 1 — WebView + React funcionando.
+                </div>
+              </div>
+            </div>
+          );
+          ''')
+          PY
+
           # Force basic dimensions/visibility so Android WebView CSS quirks cannot
           # collapse the application into a black viewport.
           python3 - <<'PY'
