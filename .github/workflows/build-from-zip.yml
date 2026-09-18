@@ -1,0 +1,81 @@
+name: Build Android from project ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "pocketpal-local-llm.zip"
+      - ".github/workflows/build-from-zip.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate ZIP
+        run: |
+          test -f pocketpal-local-llm.zip
+          unzip -t pocketpal-local-llm.zip
+
+      - name: Extract project
+        run: |
+          rm -rf extracted
+          mkdir extracted
+          unzip -q pocketpal-local-llm.zip -d extracted
+          PROJECT_DIR="$(find "$GITHUB_WORKSPACE/extracted" -name package.json -type f -print -quit | xargs -r dirname)"
+          test -n "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm install
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android toolchain
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "cmake;3.31.6" "ndk;27.2.12479018"
+
+      - name: Fetch llama.cpp
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          TAG="$(tr -d '\r\n' < llama.cpp.version)"
+          git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp.git llama.cpp
+
+      - name: Prepare Capacitor Android
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm run android:prepare
+
+      - name: Build web and sync Android
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          npm run build
+          npx cap sync android
+
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketpal-local-llm-debug-apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
