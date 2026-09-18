@@ -68,11 +68,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
 
       - name: Install Android toolchain
         run: |
+          set -e
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "cmake;3.31.6" "ndk;27.2.12479018"
 
       - name: Fetch llama.cpp
