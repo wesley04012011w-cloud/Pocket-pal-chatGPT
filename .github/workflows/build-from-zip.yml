@@ -366,7 +366,7 @@ jobs:
                   }
               }
           }
-
+          JAVA
 
           # Make the web UI resilient too, especially on devices where WebView reports safe-area insets.
           python3 - <<'PY'
