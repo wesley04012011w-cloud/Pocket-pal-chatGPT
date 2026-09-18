@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "pocketpal-local-llm.zip"
+      - "*.zip"
       - ".github/workflows/build-from-zip.yml"
 
 permissions:
@@ -17,19 +17,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate ZIP
+      - name: Find and validate project ZIP
         run: |
-          test -f pocketpal-local-llm.zip
-          unzip -t pocketpal-local-llm.zip
+          set -e
+          shopt -s nullglob
+          zips=( "$GITHUB_WORKSPACE"/*.zip )
+          if [ "${#zips[@]}" -eq 0 ]; then
+            echo "::error::Nenhum .zip encontrado na raiz do repositório."
+            exit 1
+          fi
+          if [ "${#zips[@]}" -gt 1 ]; then
+            echo "::error::Mais de um .zip encontrado na raiz. Deixe apenas o ZIP do projeto."
+            printf 'Encontrados:\n'
+            printf ' - %s\n' "${zips[@]}"
+            exit 1
+          fi
+          ZIP_PATH="${zips[0]}"
+          ZIP_NAME="$(basename "$ZIP_PATH")"
+          echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "Usando: $ZIP_NAME"
+          unzip -t "$ZIP_PATH"
 
       - name: Extract project
         run: |
+          set -e
           rm -rf extracted
           mkdir extracted
-          unzip -q pocketpal-local-llm.zip -d extracted
+          unzip -q "$ZIP_PATH" -d extracted
           PROJECT_DIR="$(find "$GITHUB_WORKSPACE/extracted" -name package.json -type f -print -quit | xargs -r dirname)"
-          test -n "$PROJECT_DIR"
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "::error::O ZIP não contém um package.json de projeto."
+            exit 1
+          fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Projeto encontrado em: $PROJECT_DIR"
 
       - name: Setup Node
         uses: actions/setup-node@v4
