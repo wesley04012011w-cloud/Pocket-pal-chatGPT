@@ -169,7 +169,7 @@ import android.provider.OpenableColumns;
 
 import androidx.annotation.NonNull;
 
-import com.getcapacitor.ActivityResult;
+import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -268,7 +268,7 @@ public class LocalLlamaPlugin extends Plugin {
             final String[] roles = new String[messages.length()];
             final String[] contents = new String[messages.length()];
             for (int i = 0; i < messages.length(); i++) {
-                JSObject m = messages.getJSObject(i);
+                JSObject m = JSObject.fromJSONObject(messages.getJSONObject(i));
                 roles[i] = m.getString("role");
                 contents[i] = m.getString("content");
             }
