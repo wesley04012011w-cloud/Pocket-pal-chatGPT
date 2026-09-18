@@ -56,6 +56,20 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Projeto encontrado em: $PROJECT_DIR"
 
+      - name: Patch llama.cpp 0.4.x native compatibility
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("native/android/LlamaEngine.cpp")
+          s = p.read_text()
+          old = "    mp.use_mmap = mmap;\n    mp.use_mlock = mlock;"
+          new = "    mp.load_mode = mmap ? (mlock ? LLAMA_LOAD_MODE_MMAP_MLOCK : LLAMA_LOAD_MODE_MMAP)\n                         : (mlock ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE);"
+          if old in s:
+              s = s.replace(old, new)
+          p.write_text(s)
+          PY
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
