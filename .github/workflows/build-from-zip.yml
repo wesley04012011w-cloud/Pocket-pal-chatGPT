@@ -68,6 +68,22 @@ jobs:
           new = "    mp.load_mode = mmap ? (mlock ? LLAMA_LOAD_MODE_MMAP_MLOCK : LLAMA_LOAD_MODE_MMAP)\n                         : (mlock ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE);"
           if old in s:
               s = s.replace(old, new)
+          # Use llama.cpp's common tokenizer helper instead of depending on the
+          # signed return-value convention directly.
+          s = s.replace('#include "chat.h"', '#include "chat.h"\n#include "common.h"')
+          import re
+          s = re.sub(
+              r'static bool decode_prompt\\(.*?\\n\\}',
+              '''static bool decode_prompt(const std::string & prompt, std::vector<llama_token> & tokens) {
+              const llama_vocab * vocab = llama_model_get_vocab(g_model);
+              if (!vocab || prompt.empty()) return false;
+              tokens = common_tokenize(vocab, prompt, true, true);
+              return !tokens.empty();
+          }''',
+              s, count=1, flags=re.S)
+          s = s.replace('cp.n_batch = (uint32_t)batch;',
+                        'cp.n_batch = std::max<uint32_t>((uint32_t)batch, 2048u);')
+          s = s.replace('render_chat(msgs, true, true)', 'render_chat(msgs, true, false)')
           p.write_text(s)
           PY
       - name: Patch Android native linker
@@ -319,44 +335,57 @@ jobs:
 
           cat > "$APP/java/$PKG/MainActivity.java" <<'JAVA'
           package dev.pocketpal.local;
-          
-          import android.graphics.Color;
+
           import android.os.Bundle;
           import android.view.View;
-          
+          import android.view.WindowManager;
+
           import androidx.core.graphics.Insets;
           import androidx.core.view.ViewCompat;
           import androidx.core.view.WindowCompat;
           import androidx.core.view.WindowInsetsCompat;
-          
+          import androidx.core.view.WindowInsetsControllerCompat;
+
           import com.getcapacitor.BridgeActivity;
-          
+
           public class MainActivity extends BridgeActivity {
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   registerPlugin(LocalLlamaPlugin.class);
                   super.onCreate(savedInstanceState);
-          
-                  // Android 15+ is edge-to-edge by default. Keep the app visually full-screen,
-                  // but inset the WebView so the UI never sits under the status/navigation bars.
-                  WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-                  getWindow().setStatusBarColor(Color.TRANSPARENT);
-                  getWindow().setNavigationBarColor(Color.TRANSPARENT);
-                  WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
-                          .setAppearanceLightStatusBars(false);
-                  WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
-                          .setAppearanceLightNavigationBars(false);
-          
+
+                  WindowCompat.enableEdgeToEdge(getWindow());
+                  getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+                  if (android.os.Build.VERSION.SDK_INT >= 29) {
+                      getWindow().setNavigationBarContrastEnforced(false);
+                  }
+
+                  WindowInsetsControllerCompat controller =
+                          WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+                  controller.setAppearanceLightStatusBars(false);
+                  controller.setAppearanceLightNavigationBars(false);
+                  controller.setSystemBarsBehavior(
+                          WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+
                   if (bridge != null && bridge.getWebView() != null) {
                       View webView = bridge.getWebView();
+                      webView.setFocusableInTouchMode(true);
+
                       ViewCompat.setOnApplyWindowInsetsListener(webView, (v, insets) -> {
-                          Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
-                          Insets gestures = insets.getInsets(WindowInsetsCompat.Type.systemGestures());
-                          int bottom = Math.max(bars.bottom, gestures.bottom);
-                          v.setPadding(bars.left, bars.top, bars.right, bottom);
+                          Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+                          Insets bars = insets.getInsets(
+                                  WindowInsetsCompat.Type.systemBars()
+                                          | WindowInsetsCompat.Type.displayCutout());
+                          int bottom = Math.max(ime.bottom, bars.bottom);
+                          v.setPadding(bars.left, bars.top, bars.right,
+                                  insets.isVisible(WindowInsetsCompat.Type.ime()) ? bottom : 0);
                           return insets;
                       });
+
                       ViewCompat.requestApplyInsets(webView);
+                      controller.hide(WindowInsetsCompat.Type.systemBars());
+                      webView.postDelayed(
+                              () -> controller.hide(WindowInsetsCompat.Type.systemBars()), 350);
                   }
               }
           }
@@ -371,6 +400,86 @@ jobs:
           s = s.replace(".app-shell{height:100dvh;", ".app-shell{height:100dvh;min-height:100dvh;")
           s = s.replace("padding:18px clamp(14px,7vw,100px) 24px", "padding:18px clamp(14px,7vw,100px) calc(24px + env(safe-area-inset-bottom, 0px))")
           p.write_text(s)
+          PY
+
+          # Android 15+/IME: ensure the generated activity receives keyboard insets.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          if p.exists():
+              s = p.read_text()
+              pat = r'(<activity[^>]*android:name="[^"]*MainActivity"[^>]*)(>)'
+              def add_resize(m):
+                  if 'windowSoftInputMode=' in m.group(1):
+                      return m.group(0)
+                  return m.group(1) + ' android:windowSoftInputMode="adjustResize"' + m.group(2)
+              s = re.sub(pat, add_resize, s, count=1)
+              p.write_text(s)
+          PY
+
+          # Defensive WebView fix for the current broken Jinja/template overlay.
+          # It clears a template accidentally placed into the message editor and
+          # hides only the bottom template-preview panel, leaving the real input active.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("index.html")
+          if p.exists():
+              s = p.read_text()
+              script = r'''
+          <script>
+          (() => {
+            const templateLike = v => typeof v === 'string' &&
+              v.length > 80 && (v.includes('{%-') || v.includes('{%')) &&
+              (v.includes('message.content') || v.includes('add_generation_prompt'));
+            const fix = () => {
+              document.querySelectorAll('textarea,input,[contenteditable="true"]').forEach(el => {
+                const value = 'value' in el ? el.value : el.textContent;
+                if (templateLike(value)) {
+                  if ('value' in el) {
+                    el.value = '';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                  } else {
+                    el.textContent = '';
+                  }
+                }
+                el.style.pointerEvents = 'auto';
+                el.style.touchAction = 'manipulation';
+                el.style.zIndex = '1000';
+              });
+              document.querySelectorAll('*').forEach(el => {
+                if (el.children.length > 8) return;
+                const t = (el.textContent || '').trim();
+                if (templateLike(t) && /jinja/i.test(t)) {
+                  const r = el.getBoundingClientRect();
+                  if (r.bottom > innerHeight * 0.55) el.style.display = 'none';
+                }
+              });
+            };
+            const boot = () => {
+              fix();
+              new MutationObserver(fix).observe(document.documentElement, {
+                childList: true, subtree: true, characterData: true
+              });
+              if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', () => {
+                  fix();
+                  const active = document.activeElement;
+                  if (active && /^(TEXTAREA|INPUT)$/.test(active.tagName)) {
+                    setTimeout(() => active.scrollIntoView({block:'nearest'}), 50);
+                  }
+                });
+              }
+            };
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', boot, {once:true});
+            } else boot();
+          })();
+          </script>
+          '''
+              if '</body>' in s and 'Defensive WebView fix for the current broken Jinja/template overlay' not in s:
+                  s = s.replace('</body>', script + '\n</body>')
+                  p.write_text(s)
           PY
 
           # Fail early if the bridge/plugin is not actually present in the Android source set.
