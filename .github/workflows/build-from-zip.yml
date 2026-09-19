@@ -883,6 +883,10 @@ jobs:
           }
           EOF
 
+          mkdir -p android/app/src/main/res/drawable
+          cp "$GITHUB_WORKSPACE/native/android/MainActivity.java" android/app/src/main/java/dev/pocketpal/local/MainActivity.java
+          cp "$GITHUB_WORKSPACE/native/android/icons/"*.xml android/app/src/main/res/drawable/
+
           cat > android/app/src/main/cpp/LlamaEngine.cpp <<'EOF'
           #include <jni.h>
           #include <android/log.h>
