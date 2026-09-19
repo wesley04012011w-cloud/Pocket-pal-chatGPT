@@ -63,7 +63,6 @@ jobs:
         run: |
           set -e
           TAG="$(tr -d '\r\n' < llama.cpp.version)"
-          # The native bridge was validated against llama.cpp 0.4.1.
           if [ "$TAG" != "v0.4.1" ]; then TAG="v0.4.1"; fi
           git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp.git llama.cpp
 
@@ -88,7 +87,8 @@ jobs:
               }
           }
           dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS
+          )
               repositories {
                   google()
                   mavenCentral()
@@ -126,6 +126,10 @@ jobs:
                   versionCode 1
                   versionName '0.1.0'
                   ndkVersion '27.2.12479018'
+
+                  ndk {
+                      abiFilters 'arm64-v8a'
+                  }
 
                   externalNativeBuild {
                       cmake {
@@ -268,13 +272,8 @@ jobs:
           import android.view.Gravity;
           import android.view.View;
           import android.view.Window;
-          import android.view.WindowInsets;
-          import android.view.WindowInsetsController;
-          import android.view.inputmethod.InputMethodManager;
-          import android.content.Context;
           import android.widget.Button;
           import android.widget.EditText;
-          import android.widget.HorizontalScrollView;
           import android.widget.LinearLayout;
           import android.widget.ScrollView;
           import android.widget.TextView;
@@ -283,9 +282,6 @@ jobs:
           import java.io.File;
           import java.io.FileOutputStream;
           import java.io.InputStream;
-          import java.util.ArrayList;
-          import java.util.List;
-          import java.util.Locale;
 
           public class MainActivity extends Activity {
               private static final int PICK_MODEL = 7001;
@@ -295,17 +291,12 @@ jobs:
               private final int PANEL_2 = Color.rgb(25, 25, 29);
               private final int TEXT = Color.rgb(241, 241, 243);
               private final int MUTED = Color.rgb(151, 151, 160);
-              private final int LINE = Color.rgb(43, 43, 48);
 
               private LinearLayout root;
-              private TextView modelStatus;
-              private TextView emptyTitle;
-              private TextView emptyText;
+              private TextView modelStatus, emptyTitle, emptyText, chat;
               private Button modelButton;
               private EditText input;
-              private TextView chat;
-              private boolean loaded = false;
-              private boolean generating = false;
+              private boolean loaded = false, generating = false;
               private File modelFile;
 
               private int dp(float v) {
@@ -334,7 +325,6 @@ jobs:
                   b.setTextSize(14);
                   b.setTextColor(Color.rgb(15,15,17));
                   b.setAllCaps(false);
-                  b.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
                   b.setBackground(bg(Color.rgb(232,232,236), 28));
                   b.setPadding(dp(18), 0, dp(18), 0);
                   return b;
@@ -343,7 +333,6 @@ jobs:
               private TextView iconButton(String symbol) {
                   TextView b = text(symbol, 28, TEXT);
                   b.setGravity(Gravity.CENTER);
-                  b.setBackground(bg(Color.TRANSPARENT, 18));
                   b.setPadding(dp(8), 0, dp(8), 0);
                   return b;
               }
@@ -362,14 +351,12 @@ jobs:
                   root = new LinearLayout(this);
                   root.setOrientation(LinearLayout.VERTICAL);
                   root.setBackgroundColor(BG);
-                  root.setPadding(0, 0, 0, 0);
 
                   LinearLayout top = new LinearLayout(this);
                   top.setGravity(Gravity.CENTER_VERTICAL);
                   top.setPadding(dp(18), dp(8), dp(14), dp(8));
 
-                  TextView menu = iconButton("☰");
-                  top.addView(menu, new LinearLayout.LayoutParams(dp(48), dp(48)));
+                  top.addView(iconButton("☰"), new LinearLayout.LayoutParams(dp(48), dp(48)));
                   TextView title = text("Chat", 25, TEXT);
                   title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
                   top.addView(title, new LinearLayout.LayoutParams(0, dp(56), 1));
@@ -377,6 +364,7 @@ jobs:
                   TextView edit = iconButton("✎");
                   edit.setOnClickListener(v -> newChat());
                   top.addView(edit, new LinearLayout.LayoutParams(dp(52), dp(52)));
+
                   TextView more = iconButton("⋮");
                   more.setOnClickListener(v -> showSettings());
                   top.addView(more, new LinearLayout.LayoutParams(dp(44), dp(52)));
@@ -388,7 +376,6 @@ jobs:
                   body.setPadding(dp(22), 0, dp(22), 0);
 
                   emptyTitle = text("Activate Model To Get Started", 24, TEXT);
-                  emptyTitle.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
                   emptyTitle.setGravity(Gravity.CENTER);
                   body.addView(emptyTitle, new LinearLayout.LayoutParams(-1, dp(42)));
 
@@ -448,7 +435,6 @@ jobs:
                   actions.addView(up, upLp);
 
                   modelStatus = text("Model not loaded", 12, MUTED);
-                  modelStatus.setGravity(Gravity.CENTER_VERTICAL);
                   LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, dp(42), 1);
                   sp.leftMargin = dp(10);
                   actions.addView(modelStatus, sp);
@@ -490,7 +476,7 @@ jobs:
                               int n;
                               while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                           }
-                          runOnUiThread(() -> loadModel());
+                          runOnUiThread(this::loadModel);
                       } catch (Exception e) {
                           runOnUiThread(() -> Toast.makeText(this, "Importação falhou: " + e.getMessage(), Toast.LENGTH_LONG).show());
                       }
@@ -521,12 +507,8 @@ jobs:
                           modelButton.setEnabled(true);
                           modelButton.setText(ok ? "Model Loaded" : "Select Model");
                           modelStatus.setText(ok ? modelFile.getName() : "Model load failed");
-                          if (ok) {
-                              emptyTitle.setText("Ready");
-                              emptyText.setText("Your model is loaded locally. Type a message below.");
-                          } else {
-                              Toast.makeText(this, "Falha ao carregar o modelo.", Toast.LENGTH_LONG).show();
-                          }
+                          emptyTitle.setText(ok ? "Ready" : "Activate Model To Get Started");
+                          emptyText.setText(ok ? "Your model is loaded locally. Type a message below." : "Select the model and load it. After loading, start chatting with your local model.");
                       });
                   }, "model-loader").start();
               }
@@ -577,10 +559,12 @@ jobs:
                   ctx.setHint("Context (default 8192)");
                   ctx.setInputType(2);
                   box.addView(ctx);
+
                   EditText threads = new EditText(this);
                   threads.setHint("CPU threads (default 6)");
                   threads.setInputType(2);
                   box.addView(threads);
+
                   EditText tokens = new EditText(this);
                   tokens.setHint("Max output tokens (default 1024)");
                   tokens.setInputType(2);
@@ -602,7 +586,6 @@ jobs:
           }
           EOF
 
-          # Patch the C++ bridge for llama.cpp 0.4.1.
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -628,9 +611,9 @@ jobs:
 
           cat > android/README.md <<'EOF'
           # PocketPal Local — Native Android
-          
+
           Native Android UI + C++ llama.cpp engine. No Capacitor, no WebView, no React runtime.
-          
+
           The interface is an original dark chat layout inspired by the provided visual reference, without the reference app's mascot/icon.
           EOF
 
