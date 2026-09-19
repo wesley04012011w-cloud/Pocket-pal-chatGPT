@@ -664,10 +664,9 @@ jobs:
                   final String header=chat.getText().toString().isEmpty()?"":chat.getText().toString()+"\n\n"; chat.setText(header+"You\n"+prompt+"\n\nAssistant\n");
                   String[] roles=new String[]{"user"}; String[] contents=new String[]{prompt};
                   new Thread(() -> {
+                      android.util.Log.e("PocketPalNative","Java: nativeGenerateChat ENTER");
                       boolean ok=NativeBridge.nativeGenerateChat(roles,contents,maxTokens,temperature,topP,topK,minP,seed,useJinja,enableThinking,systemPrompt,(piece,done) -> {
                           if(piece!=null&&!piece.isEmpty()) synchronized(generationRaw){generationRaw.append(piece);}
-                          // IMPORTANT: there is deliberately no terminal JNI callback.
-                          // nativeGenerateChat now returns first; Java owns the terminal UI transition.
                           if(!uiUpdatePosted){
                               uiUpdatePosted=true;
                               mainHandler.postDelayed(() -> {
@@ -676,6 +675,7 @@ jobs:
                               },50);
                           }
                       });
+                      android.util.Log.e("PocketPalNative","Java: nativeGenerateChat RETURN ok="+ok);
                       mainHandler.post(() -> {
                           if(terminalPosted)return;
                           terminalPosted=true;
@@ -825,24 +825,35 @@ jobs:
             for(int step=0;step<std::max(1,(int)maxTok);step++){
               if(g_stop){reason=EndReason::STOP;break;}
               llama_token tok=common_sampler_sample(smp,g_ctx,-1);
-              const bool isEog=llama_vocab_is_eog(v,tok);
+              if(llama_vocab_is_eog(v,tok)){
+                LOGE("generation: EOG token=%d", (int)tok);
+                reason=EndReason::EOG;
+                g_stop=true;
+                break;
+              }
               common_sampler_accept(smp,tok,true);
               std::string piece=common_token_to_piece(v,tok,true);
-              if(!isEog&&!piece.empty()&&!emit(e,cb,mid,piece)){reason=EndReason::CALLBACK;break;}
+              if(!piece.empty()&&!emit(e,cb,mid,piece)){reason=EndReason::CALLBACK;break;}
               common_batch_clear(b);
               common_batch_add(b,tok,pos++,{0},true);
               if(llama_decode(g_ctx,b)!=0){reason=EndReason::DECODE_ERROR;break;}
-              if(isEog){reason=EndReason::EOG;break;}
             }
-            LOGE("generation terminal: reason=%s",
+            LOGE("generation: terminal cleanup begin reason=%s",
                  reason==EndReason::EOG?"EOG":
                  reason==EndReason::STOP?"STOP":
                  reason==EndReason::LIMIT?"LIMIT":
                  reason==EndReason::CALLBACK?"CALLBACK":"DECODE_ERROR");
+            LOGE("generation: before batch_free");
             llama_batch_free(b);
+            LOGE("generation: after batch_free");
+            LOGE("generation: before sampler_free");
             common_sampler_free(smp);
+            LOGE("generation: after sampler_free");
+            LOGE("generation: before DeleteLocalRef");
             e->DeleteLocalRef(cls);
+            LOGE("generation: after DeleteLocalRef");
             g_stop=false;
+            LOGE("generation: returning JNI_TRUE");
             return reason==EndReason::DECODE_ERROR?JNI_FALSE:JNI_TRUE;
            }catch(const std::exception&x){LOGE("generation: %s",x.what());return JNI_FALSE;}catch(...){LOGE("generation unknown error");return JNI_FALSE;}
           }
