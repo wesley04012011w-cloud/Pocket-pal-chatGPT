@@ -244,6 +244,125 @@ jobs:
           </resources>
           EOF
 
+          cat > android/app/src/main/java/dev/pocketpal/local/MarkdownRenderer.java <<'EOF'
+package dev.pocketpal.local;
+
+import android.graphics.Typeface;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.*;
+import android.graphics.Color;
+import java.util.regex.*;
+
+public final class MarkdownRenderer {
+    private static final int MUTED = Color.rgb(160,160,170);
+    private static final int CODE_BG = Color.rgb(28,28,33);
+    private MarkdownRenderer() {}
+
+    public static SpannableString render(String src) {
+        if (src == null) src = "";
+        String normalized = src.replace("\r\n","\n").replace("\r","\n");
+        StringBuilder out = new StringBuilder();
+        java.util.ArrayList<Mark> marks = new java.util.ArrayList<>();
+        String[] lines = normalized.split("\n",-1);
+        boolean inCode=false;
+        StringBuilder code=new StringBuilder();
+        for (String line: lines) {
+            if (line.trim().startsWith("\`\`\`")) {
+                if (inCode) {
+                    int st=out.length(); out.append(code);
+                    if (code.length()>0 && code.charAt(code.length()-1)=='\n') out.setLength(out.length()-1);
+                    marks.add(new Mark(st,out.length(),"code")); out.append('\n'); code.setLength(0); inCode=false;
+                } else {
+                    inCode=true;
+                    if (out.length()>0 && out.charAt(out.length()-1)!='\n') out.append('\n');
+                }
+                continue;
+            }
+            if (inCode) { code.append(line).append('\n'); continue; }
+            if (line.matches("^#{1,6}\\s+.*")) {
+                int n=0; while(n<line.length() && line.charAt(n)=='#') n++;
+                int st=out.length(); out.append(line.substring(n).trim()).append('\n');
+                marks.add(new Mark(st,out.length()-1,"h"+n)); continue;
+            }
+            if (line.matches("^\\s*>\\s?.*")) {
+                int st=out.length(); out.append("│ ").append(line.replaceFirst("^\\s*>\\s?","")).append('\n');
+                marks.add(new Mark(st,out.length()-1,"quote")); continue;
+            }
+            if (line.matches("^\\s*[-*+]\\s+.*") || line.matches("^\\s*\\d+[.)]\\s+.*"))
+                line=line.replaceFirst("^\\s*([-*+]|\\d+[.)])\\s+","• ");
+            out.append(line).append('\n');
+        }
+        if (inCode && code.length()>0) {
+            int st=out.length(); out.append(code);
+            if (code.charAt(code.length()-1)=='\n') out.setLength(out.length()-1);
+            marks.add(new Mark(st,out.length(),"code"));
+        }
+        if (out.length()>0) out.setLength(out.length()-1);
+        SpannableString sp=new SpannableString(out.toString());
+        for(Mark m:marks) apply(sp,m);
+        Matcher bold=Pattern.compile("\\*\\*(.+?)\\*\\*|__(.+?)__").matcher(sp);
+        while(bold.find()) sp.setSpan(new StyleSpan(Typeface.BOLD),bold.start(),bold.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        Matcher italic=Pattern.compile("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)|(?<!_)_(.+?)_").matcher(sp);
+        while(italic.find()) sp.setSpan(new StyleSpan(Typeface.ITALIC),italic.start(),italic.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        Matcher inline=Pattern.compile("\`([^\`]+)\`").matcher(sp);
+        while(inline.find()) {
+            sp.setSpan(new TypefaceSpan(Typeface.MONOSPACE),inline.start(),inline.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sp.setSpan(new BackgroundColorSpan(CODE_BG),inline.start(),inline.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return sp;
+    }
+
+    private static void apply(SpannableString sp, Mark m) {
+        if(m.end<=m.start) return;
+        int f=Spanned.SPAN_EXCLUSIVE_EXCLUSIVE;
+        if(m.kind.equals("code")) {
+            sp.setSpan(new TypefaceSpan(Typeface.MONOSPACE),m.start,m.end,f);
+            sp.setSpan(new BackgroundColorSpan(CODE_BG),m.start,m.end,f);
+        } else if(m.kind.equals("quote")) {
+            sp.setSpan(new ForegroundColorSpan(MUTED),m.start,m.end,f);
+        } else if(m.kind.startsWith("h")) {
+            sp.setSpan(new StyleSpan(Typeface.BOLD),m.start,m.end,f);
+            int n=Integer.parseInt(m.kind.substring(1));
+            sp.setSpan(new RelativeSizeSpan(n<=2?1.28f:1.12f),m.start,m.end,f);
+        }
+    }
+    private static final class Mark {
+        final int start,end; final String kind;
+        Mark(int s,int e,String k){start=s;end=e;kind=k;}
+    }
+}
+          EOF
+
+          cat > android/app/src/main/java/dev/pocketpal/local/ThinkingParser.java <<'EOF'
+package dev.pocketpal.local;
+
+public final class ThinkingParser {
+    public static final class Parts {
+        public final String thinking, answer;
+        public final boolean thinkingActive;
+        Parts(String t,String a,boolean active){thinking=t;answer=a;thinkingActive=active;}
+    }
+    private ThinkingParser(){}
+    public static Parts split(String text) {
+        if(text==null) text="";
+        int open=text.indexOf("<think>"), close=text.indexOf("</think>");
+        if(open>=0) {
+            int st=open+7;
+            if(close>=st) return new Parts(text.substring(st,close).trim(),text.substring(close+8).trim(),false);
+            return new Parts(text.substring(st).trim(),"",true);
+        }
+        open=text.indexOf("<thinking>"); close=text.indexOf("</thinking>");
+        if(open>=0) {
+            int st=open+10;
+            if(close>=st) return new Parts(text.substring(st,close).trim(),text.substring(close+11).trim(),false);
+            return new Parts(text.substring(st).trim(),"",true);
+        }
+        return new Parts("",text,false);
+    }
+}
+          EOF
+
           cat > android/app/src/main/java/dev/pocketpal/local/NativeBridge.java <<'EOF'
           package dev.pocketpal.local;
 
@@ -306,7 +425,7 @@ jobs:
 
               private LinearLayout root;
               private ScrollView chatScroll;
-              private TextView modelStatus, emptyTitle, emptyText, chat;
+              private TextView modelStatus, emptyTitle, emptyText, chat, thinking;
               private Button modelButton;
               private EditText input;
               private boolean loaded = false, generating = false;
@@ -413,9 +532,18 @@ jobs:
                   bp.topMargin = dp(16);
                   body.addView(modelButton, bp);
 
+                  thinking = text("", 14, MUTED);
+                  thinking.setGravity(Gravity.TOP | Gravity.START);
+                  thinking.setPadding(dp(14), dp(10), dp(14), dp(10));
+                  thinking.setBackground(bg(PANEL_2, 16));
+                  thinking.setTextIsSelectable(true);
+                  thinking.setVisibility(View.GONE);
+                  body.addView(thinking, new LinearLayout.LayoutParams(-1, -2));
+
                   chat = text("", 16, TEXT);
                   chat.setGravity(Gravity.TOP | Gravity.START);
                   chat.setTextIsSelectable(true);
+                  chat.setLineSpacing(0, 1.08f);
                   chatScroll = new ScrollView(this);
                   chatScroll.setFillViewport(true);
                   chatScroll.addView(chat, new ScrollView.LayoutParams(-1, -2));
@@ -572,9 +700,15 @@ jobs:
                   new Thread(() -> {
                       boolean ok = NativeBridge.nativeGenerateChat(
                               roles, contents, 1024, 0.7f, 0.95f, 40, 0.05f, -1L,
-                              (text, done) -> {
-                                  if (text != null && !text.isEmpty()) answer.append(text);
-                                  runOnUiThread(() -> chat.setText(header + "You\n" + prompt + "\n\nAssistant\n" + answer));
+                              (piece, done) -> {
+                                  if (piece != null && !piece.isEmpty()) answer.append(piece);
+                                  runOnUiThread(() -> {
+                                      ThinkingParser.Parts parts = ThinkingParser.split(answer.toString());
+                                      thinking.setText(parts.thinking.isEmpty() ? "" : "🧠  Thinking\n\n" + MarkdownRenderer.render(parts.thinking));
+                                      thinking.setVisibility(parts.thinking.isEmpty() ? View.GONE : View.VISIBLE);
+                                      chat.setText(header + "You\n" + MarkdownRenderer.render(prompt) + "\n\nAssistant\n" + MarkdownRenderer.render(parts.answer));
+                                      if (shouldAutoScroll()) chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+                                  });
                                   if (done) runOnUiThread(() -> generating = false);
                               });
                       if (!ok) runOnUiThread(() -> {
@@ -588,8 +722,15 @@ jobs:
                   }, "llama-generate").start();
               }
 
+              private boolean shouldAutoScroll() {
+                  int diff = chatScroll.getChildAt(0).getBottom() - (chatScroll.getHeight() + chatScroll.getScrollY());
+                  return diff < dp(96);
+              }
+
               private void newChat() {
                   chat.setText("");
+                  thinking.setText("");
+                  thinking.setVisibility(View.GONE);
                   input.setText("");
                   chatScroll.setVisibility(View.GONE);
                   emptyTitle.setVisibility(View.VISIBLE);
