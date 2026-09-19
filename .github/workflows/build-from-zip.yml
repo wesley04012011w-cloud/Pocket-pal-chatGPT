@@ -531,7 +531,7 @@ jobs:
                   modelStatus.setText("Loading " + modelFile.getName() + "…");
                   new Thread(() -> {
                       boolean ok = NativeBridge.nativeLoad(
-                              modelFile.getAbsolutePath(), 8192, 2, 8, 512,
+                              modelFile.getAbsolutePath(), 8192, 4, 8, 512,
                               true, true, false);
                       runOnUiThread(() -> {
                           loaded = ok;
@@ -646,7 +646,7 @@ jobs:
           }'''
           s, n = re.subn(pat, repl, s, count=1, flags=re.S)
           if n != 1: raise SystemExit("decode_prompt not found")
-          s = s.replace('cp.n_batch = (uint32_t)batch;', 'cp.n_batch = std::max<uint32_t>((uint32_t)batch, 2048u);')
+          s = s.replace('cp.n_batch = (uint32_t)batch;', 'cp.n_batch = (uint32_t)batch;')
           s = s.replace('render_chat(msgs, true, true)', 'render_chat(msgs, true, false)')
           s = s.replace('llama_sampler_init_dist((uint32_t)seed)', 'llama_sampler_init_dist(seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t)seed)')
           p.write_text(s)
