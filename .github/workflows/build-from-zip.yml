@@ -341,6 +341,7 @@ jobs:
            public static native String nativeTemplate();
            public static native void nativeStop();
            public static native void nativeFree();
+           public static native void nativeSetLogPath(String path);
            public static native boolean nativeGenerateChat(String[] roles,String[] contents,int maxTokens,float temperature,float topP,int topK,float minP,long seed,boolean useJinja,boolean enableThinking,String systemPrompt,TokenCallback callback);
           }
           interface TokenCallback{void emit(String text,boolean done);}
@@ -352,6 +353,8 @@ jobs:
 
           import android.app.Activity;
           import android.app.AlertDialog;
+          import android.app.ActivityManager;
+          import android.app.ApplicationExitInfo;
           import android.content.Intent;
           import android.graphics.Color;
           import android.graphics.Typeface;
@@ -374,10 +377,14 @@ jobs:
 
           import java.io.File;
           import java.io.FileOutputStream;
+          import java.io.FileInputStream;
           import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.nio.charset.StandardCharsets;
 
           public class MainActivity extends Activity {
               private static final int PICK_MODEL = 7001;
+              private static final int CREATE_LOG = 7002;
 
               private final int BG = Color.rgb(9, 9, 11);
               private final int PANEL = Color.rgb(18, 18, 21);
@@ -392,6 +399,7 @@ jobs:
               private EditText input;
               private boolean loaded = false, generating = false;
               private File modelFile;
+              private File diagnosticFile;
               private TextView copyButton, sendButton;
                   private boolean followOutput=true, thinkingExpanded=true, thinkingWasActive=false;
                   private String lastAnswer="", lastThinking="";
@@ -451,8 +459,83 @@ jobs:
                   if (android.os.Build.VERSION.SDK_INT >= 30) {
                       w.setDecorFitsSystemWindows(false);
                   }
+                  initDiagnostics();
                   buildUi();
                   root.post(() -> applySystemBarInsets());
+              }
+
+              private void initDiagnostics() {
+                  try {
+                      File base = getExternalFilesDir(null);
+                      if (base == null) base = getFilesDir();
+                      File dir = new File(base, "logs");
+                      if (!dir.exists()) dir.mkdirs();
+                      diagnosticFile = new File(dir, "pocketpal_diagnostics.log");
+                      appendDiagnostic("=== SESSION START " + System.currentTimeMillis() + " ===");
+                      NativeBridge.nativeSetLogPath(diagnosticFile.getAbsolutePath());
+                      final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+                      Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+                          appendDiagnostic("JAVA_UNCAUGHT thread=" + thread.getName() + " " + android.util.Log.getStackTraceString(error));
+                          if (previous != null) previous.uncaughtException(thread, error);
+                      });
+                      if (android.os.Build.VERSION.SDK_INT >= 30) new Thread(this::inspectPreviousExit, "diagnostic-exit").start();
+                  } catch (Throwable t) { android.util.Log.e("PocketPalDiag", "init diagnostics", t); }
+              }
+
+              private synchronized void appendDiagnostic(String line) {
+                  try {
+                      if (diagnosticFile == null) return;
+                      File parent = diagnosticFile.getParentFile();
+                      if (parent != null && !parent.exists()) parent.mkdirs();
+                      try (FileOutputStream out = new FileOutputStream(diagnosticFile, true)) {
+                          out.write(("[" + System.currentTimeMillis() + "] " + line + "\n").getBytes(StandardCharsets.UTF_8));
+                          out.flush();
+                      }
+                  } catch (Throwable ignored) {}
+              }
+
+              private void inspectPreviousExit() {
+                  try {
+                      ActivityManager am = (ActivityManager)getSystemService(ACTIVITY_SERVICE);
+                      java.util.List<ApplicationExitInfo> exits = am.getHistoricalProcessExitReasons(getPackageName(), 0);
+                      if (exits == null || exits.isEmpty()) return;
+                      ApplicationExitInfo info = exits.get(0);
+                      int reason = info.getReason();
+                      if (reason != ApplicationExitInfo.REASON_CRASH &&
+                          reason != ApplicationExitInfo.REASON_CRASH_NATIVE &&
+                          reason != ApplicationExitInfo.REASON_ANR) return;
+                      appendDiagnostic("PREVIOUS_EXIT reason=" + reasonName(reason) + " status=" + info.getStatus() +
+                              " importance=" + info.getImportance() + " description=" + String.valueOf(info.getDescription()));
+                      try (InputStream trace = info.getTraceInputStream()) {
+                          if (trace != null) {
+                              byte[] buf = new byte[8192]; int n, total = 0; StringBuilder dump = new StringBuilder();
+                              while (total < 1024 * 1024 && (n = trace.read(buf)) > 0) {
+                                  dump.append(new String(buf, 0, n, StandardCharsets.UTF_8)); total += n;
+                              }
+                              if (dump.length() > 0) appendDiagnostic("PREVIOUS_EXIT_TRACE\n" + dump);
+                          }
+                      } catch (Throwable t) { appendDiagnostic("PREVIOUS_EXIT_TRACE_ERROR " + android.util.Log.getStackTraceString(t)); }
+                  } catch (Throwable t) { appendDiagnostic("PREVIOUS_EXIT_INSPECT_ERROR " + android.util.Log.getStackTraceString(t)); }
+              }
+
+              private String reasonName(int reason) {
+                  switch (reason) {
+                      case ApplicationExitInfo.REASON_CRASH: return "JAVA_CRASH";
+                      case ApplicationExitInfo.REASON_CRASH_NATIVE: return "NATIVE_CRASH";
+                      case ApplicationExitInfo.REASON_ANR: return "ANR";
+                      default: return "OTHER_" + reason;
+                  }
+              }
+
+              private void exportDiagnosticLog() {
+                  if (diagnosticFile == null || !diagnosticFile.exists()) {
+                      Toast.makeText(this, "Diagnostic log ainda não existe.", Toast.LENGTH_SHORT).show(); return;
+                  }
+                  Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                  i.addCategory(Intent.CATEGORY_OPENABLE);
+                  i.setType("text/plain");
+                  i.putExtra(Intent.EXTRA_TITLE, "pocketpal_diagnostics.txt");
+                  startActivityForResult(i, CREATE_LOG);
               }
 
               private void buildUi() {
@@ -602,6 +685,22 @@ jobs:
 
               @Override protected void onActivityResult(int request, int result, Intent data) {
                   super.onActivityResult(request, result, data);
+                  if (request == CREATE_LOG) {
+                      if (result != RESULT_OK || data == null || data.getData() == null) return;
+                      Uri uri = data.getData();
+                      new Thread(() -> {
+                          try (InputStream in = new FileInputStream(diagnosticFile);
+                               OutputStream out = getContentResolver().openOutputStream(uri)) {
+                              if (out == null) throw new IllegalStateException("Não foi possível abrir o destino.");
+                              byte[] buf = new byte[8192]; int n;
+                              while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                              runOnUiThread(() -> Toast.makeText(this, "Log exportado.", Toast.LENGTH_SHORT).show());
+                          } catch (Exception e) {
+                              runOnUiThread(() -> Toast.makeText(this, "Exportação falhou: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                          }
+                      }, "diagnostic-export").start();
+                      return;
+                  }
                   if (request != PICK_MODEL || result != RESULT_OK || data == null || data.getData() == null) return;
                   Uri uri = data.getData();
                   new Thread(() -> {
@@ -657,6 +756,7 @@ jobs:
               }
 
               private void sendMessage() {
+                  appendDiagnostic("JAVA_SEND_MESSAGE loaded=" + loaded + " generating=" + generating);
                   if(!loaded)return; String prompt=input.getText().toString().trim(); if(prompt.isEmpty()||generating)return;
                   input.setText(""); generating=true; followOutput=true; thinkingExpanded=true; thinkingWasActive=false; lastAnswer=""; lastThinking=""; generationRaw.setLength(0);
                   uiUpdatePosted=false; terminalPosted=false; if(sendButton!=null)sendButton.setText("■");
@@ -664,6 +764,7 @@ jobs:
                   final String header=chat.getText().toString().isEmpty()?"":chat.getText().toString()+"\n\n"; chat.setText(header+"You\n"+prompt+"\n\nAssistant\n");
                   String[] roles=new String[]{"user"}; String[] contents=new String[]{prompt};
                   new Thread(() -> {
+                      appendDiagnostic("JAVA nativeGenerateChat ENTER");
                       android.util.Log.e("PocketPalNative","Java: nativeGenerateChat ENTER");
                       boolean ok=NativeBridge.nativeGenerateChat(roles,contents,maxTokens,temperature,topP,topK,minP,seed,useJinja,enableThinking,systemPrompt,(piece,done) -> {
                           if(piece!=null&&!piece.isEmpty()) synchronized(generationRaw){generationRaw.append(piece);}
@@ -675,6 +776,7 @@ jobs:
                               },50);
                           }
                       });
+                      appendDiagnostic("JAVA nativeGenerateChat RETURN ok=" + ok);
                       android.util.Log.e("PocketPalNative","Java: nativeGenerateChat RETURN ok="+ok);
                       mainHandler.post(() -> {
                           if(terminalPosted)return;
@@ -727,7 +829,7 @@ jobs:
                   generating=false;
                   if(sendButton!=null)sendButton.setText("➤");
               }
-              private void stopGeneration(){if(generating)NativeBridge.nativeStop();}
+              private void stopGeneration(){appendDiagnostic("JAVA STOP pressed");if(generating)NativeBridge.nativeStop();}
               private void renderThinking(String value,boolean expanded){if(value==null||value.trim().isEmpty()){thinking.setVisibility(View.GONE);return;}thinking.setVisibility(View.VISIBLE);if(expanded){SpannableStringBuilder b=new SpannableStringBuilder("🧠  Thinking\n\n");b.append(MarkdownRenderer.render(value));thinking.setText(b);}else thinking.setText("Thinking  >");}
               private boolean shouldAutoScroll() { return followOutput; }
 
@@ -772,6 +874,7 @@ jobs:
               }
 
               @Override protected void onDestroy() {
+                  appendDiagnostic("=== SESSION DESTROY ===");
                   super.onDestroy();
                   if (generating) NativeBridge.nativeStop();
                   mainHandler.removeCallbacksAndMessages(null);
@@ -880,7 +983,7 @@ jobs:
           private CheckBox sc(String h,boolean v){CheckBox c=new CheckBox(this);c.setText(h);c.setTextColor(TEXT);c.setChecked(v);return c;}
           private int cl(int v,int a,int b){return Math.max(a,Math.min(b,v));} private float cf(float v,float a,float b){return Math.max(a,Math.min(b,v));}
           private void showSettings(){
-           ScrollView sv=new ScrollView(this);LinearLayout b=new LinearLayout(this);b.setOrientation(LinearLayout.VERTICAL);b.setPadding(dp(18),dp(8),dp(18),dp(8));sv.addView(b);
+           ScrollView sv=new ScrollView(this);LinearLayout b=new LinearLayout(this);b.setOrientation(LinearLayout.VERTICAL);b.setPadding(dp(18),dp(8),dp(18),dp(8));sv.addView(b); Button logButton=button("Export diagnostic log"); logButton.setOnClickListener(v->exportDiagnosticLog()); b.addView(logButton);
            CheckBox j=sc("Use Jinja chat template",useJinja),thk=sc("Enable thinking / reasoning",enableThinking),fl=sc("Flash Attention",flashAttention),mm=sc("MMap model file",mmap),ram=sc("Keep model in RAM (MLOCK)",mlock);
            b.addView(j);b.addView(thk);b.addView(fl);b.addView(mm);b.addView(ram);
            EditText c=sf("Context",String.valueOf(context),2),t=sf("Generation threads",String.valueOf(threads),2),bt=sf("Prompt threads",String.valueOf(batchThreads),2),ba=sf("Batch",String.valueOf(batch),2),mx=sf("Max output tokens",String.valueOf(maxTokens),2),te=sf("Temperature",String.valueOf(temperature),8194),tp=sf("Top P",String.valueOf(topP),8194),tk=sf("Top K",String.valueOf(topK),2),mp=sf("Min P",String.valueOf(minP),8194),se=sf("Seed (-1=random)",String.valueOf(seed),4098),sy=sf("System prompt",systemPrompt,InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
