@@ -303,10 +303,29 @@ jobs:
           public final class ThinkingParser {
            public static final class Parts{public final String thinking,answer;public final boolean active;Parts(String t,String a,boolean x){thinking=t;answer=a;active=x;}}
            private ThinkingParser(){}
+           private static final String[][] TAGS={
+            {"<think>","</think>"},{"<thinking>","</thinking>"},
+            {"<|thinking|>","<|end_thinking|>"},
+            {"<|begin_of_thought|>","<|end_of_thought|>"},
+            {"<|begin_of_thinking|>","<|end_of_thinking|>"},
+            {"<｜begin▁of▁thinking｜>","<｜end▁of▁thinking｜>"},
+            {"<｜begin▁of▁thought｜>","<｜end▁of▁thought｜>"}
+           };
            public static Parts split(String text){
             if(text==null)text="";
-            String[][] p={{"<think>","</think>"},{"<thinking>","</thinking>"},{"<|thinking|>","<|end_thinking|>"},{"<|begin_of_thought|>","<|end_of_thought|>"},{"<|begin_of_thinking|>","<|end_of_thinking|>"}};
-            for(String[] x:p){int a=text.indexOf(x[0]);if(a>=0){int st=a+x[0].length(),b=text.indexOf(x[1],st);if(b>=0)return new Parts(text.substring(st,b).trim(),text.substring(b+x[1].length()).trim(),false);return new Parts(text.substring(st).trim(),"",true);}}
+            int best=-1; String open=null,close=null;
+            for(String[] p:TAGS){int a=text.indexOf(p[0]);if(a>=0&&(best<0||a<best)){best=a;open=p[0];close=p[1];}}
+            if(best>=0){
+             int st=best+open.length(),b=text.indexOf(close,st);
+             if(b>=0)return new Parts(text.substring(st,b).trim(),text.substring(b+close.length()).trim(),false);
+             return new Parts(text.substring(st).trim(),"",true);
+            }
+            // DeepSeek-R1 templates often prefill <think> in the prompt,
+            // so the generated stream starts directly with reasoning and only
+            // emits the closing tag.
+            int end=-1; String endTag=null;
+            for(String[] p:TAGS){int b=text.indexOf(p[1]);if(b>=0&&(end<0||b<end)){end=b;endTag=p[1];}}
+            if(end>=0)return new Parts(text.substring(0,end).trim(),text.substring(end+endTag.length()).trim(),false);
             return new Parts("",text,false);
            }
           }
