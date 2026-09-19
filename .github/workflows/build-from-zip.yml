@@ -644,7 +644,16 @@ jobs:
                           runOnUiThread(() -> { try {
                               String raw; synchronized(generationRaw){raw=generationRaw.toString();} ThinkingParser.Parts parts=ThinkingParser.split(raw); lastThinking=parts.thinking;
                               renderThinking(lastThinking,!done||thinkingExpanded);
-                              SpannableStringBuilder cb=new SpannableStringBuilder(); cb.append(header).append("You\n").append(MarkdownRenderer.render(prompt)).append("\n\nAssistant\n").append(MarkdownRenderer.render(parts.answer)); chat.setText(cb);
+                              // Keep streaming rendering cheap: do not rebuild the full Markdown
+                              // Spannable on every token. Render the final answer as Markdown once.
+                              if(done){
+                                  SpannableStringBuilder cb=new SpannableStringBuilder();
+                                  cb.append(header).append("You\n").append(MarkdownRenderer.render(prompt))
+                                    .append("\n\nAssistant\n").append(MarkdownRenderer.render(parts.answer));
+                                  chat.setText(cb);
+                              }else{
+                                  chat.setText(header+"You\\n"+prompt+"\\n\\nAssistant\\n"+parts.answer);
+                              }
                               if(followOutput)chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
                               if(done){thinkingExpanded=false;renderThinking(lastThinking,false);lastAnswer=parts.answer;copyButton.setVisibility(lastAnswer.trim().isEmpty()?View.GONE:View.VISIBLE);generating=false;if(sendButton!=null)sendButton.setText("➤");}
                           }catch(Throwable ui){android.util.Log.e("PocketPalUI","render",ui);} });
