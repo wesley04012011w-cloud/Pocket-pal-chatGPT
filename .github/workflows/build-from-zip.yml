@@ -371,6 +371,7 @@ jobs:
               private EditText input;
               private boolean loaded = false, generating = false;
               private File modelFile;
+              private TextView copyButton, sendButton;
                   private boolean followOutput=true, thinkingExpanded=true;
                   private String lastAnswer="", lastThinking="";
                   private final StringBuilder generationRaw=new StringBuilder();
