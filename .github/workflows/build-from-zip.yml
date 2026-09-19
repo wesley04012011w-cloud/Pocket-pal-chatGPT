@@ -132,7 +132,7 @@ jobs:
 
                   externalNativeBuild {
                       cmake {
-                          cppFlags '-std=c++17', '-O3'
+                          cppFlags '-std=c++17', '-O3', '-DNDEBUG'
                       }
                   }
               }
@@ -463,7 +463,12 @@ jobs:
                   root.setOnApplyWindowInsetsListener((v, insets) -> {
                       int t = android.view.WindowInsets.Type.systemBars();
                       android.graphics.Insets bars = insets.getInsets(t);
-                      v.setPadding(v.getPaddingLeft(), bars.top, v.getPaddingRight(), bars.bottom);
+                      int bottom = bars.bottom;
+                      if (android.os.Build.VERSION.SDK_INT >= 30) {
+                          android.graphics.Insets ime = insets.getInsets(android.view.WindowInsets.Type.ime());
+                          bottom = Math.max(bottom, ime.bottom);
+                      }
+                      v.setPadding(v.getPaddingLeft(), bars.top, v.getPaddingRight(), bottom);
                       return insets;
                   });
                   root.requestApplyInsets();
@@ -519,7 +524,7 @@ jobs:
                   modelStatus.setText("Loading " + modelFile.getName() + "…");
                   new Thread(() -> {
                       boolean ok = NativeBridge.nativeLoad(
-                              modelFile.getAbsolutePath(), 8192, 6, 6, 512,
+                              modelFile.getAbsolutePath(), 8192, 2, 8, 512,
                               true, true, false);
                       runOnUiThread(() -> {
                           loaded = ok;
