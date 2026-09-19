@@ -840,8 +840,29 @@ jobs:
             for(size_t off=0;off<toks.size()&&!g_stop;){common_batch_clear(b);int take=(int)std::min((size_t)llama_n_batch(g_ctx),toks.size()-off);for(int i=0;i<take;i++)common_batch_add(b,toks[off+i],pos++,{0},off+i+1==toks.size());if(llama_decode(g_ctx,b)!=0){ok=false;break;}off+=take;}
             if(!ok){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}
             if(g_stop){llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;}
-            bool stopped=false; bool eog=false; for(int step=0;step<std::max(1,(int)maxTok)&&!g_stop;step++){llama_token tok=common_sampler_sample(smp,g_ctx,-1);if(llama_vocab_is_eog(v,tok)){eog=true;break;}common_sampler_accept(smp,tok,true);std::string piece=common_token_to_piece(v,tok,true);if(!piece.empty()&&!emit(e,cb,mid,piece)){stopped=true;break;}common_batch_clear(b);common_batch_add(b,tok,pos++,{0},true);if(llama_decode(g_ctx,b)!=0){stopped=true;break;}} if(g_stop)stopped=true; LOGE("generation terminal: stopped=%d eog=%d",stopped?1:0,eog?1:0);
-            llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;
+            enum class EndReason { EOG, STOP, LIMIT, CALLBACK, DECODE_ERROR };
+            EndReason reason=EndReason::LIMIT;
+            for(int step=0;step<std::max(1,(int)maxTok);step++){
+              if(g_stop){reason=EndReason::STOP;break;}
+              llama_token tok=common_sampler_sample(smp,g_ctx,-1);
+              if(llama_vocab_is_eog(v,tok)){reason=EndReason::EOG;break;}
+              common_sampler_accept(smp,tok,true);
+              std::string piece=common_token_to_piece(v,tok,true);
+              if(!piece.empty()&&!emit(e,cb,mid,piece)){reason=EndReason::CALLBACK;break;}
+              common_batch_clear(b);
+              common_batch_add(b,tok,pos++,{0},true);
+              if(llama_decode(g_ctx,b)!=0){reason=EndReason::DECODE_ERROR;break;}
+            }
+            LOGE("generation terminal: reason=%s",
+                 reason==EndReason::EOG?"EOG":
+                 reason==EndReason::STOP?"STOP":
+                 reason==EndReason::LIMIT?"LIMIT":
+                 reason==EndReason::CALLBACK?"CALLBACK":"DECODE_ERROR");
+            llama_batch_free(b);
+            common_sampler_free(smp);
+            e->DeleteLocalRef(cls);
+            g_stop=false;
+            return reason==EndReason::DECODE_ERROR?JNI_FALSE:JNI_TRUE;
            }catch(const std::exception&x){LOGE("generation: %s",x.what());return JNI_FALSE;}catch(...){LOGE("generation unknown error");return JNI_FALSE;}
           }
 
