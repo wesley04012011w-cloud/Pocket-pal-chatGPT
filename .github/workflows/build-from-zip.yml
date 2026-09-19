@@ -662,7 +662,15 @@ jobs:
                           if(piece!=null&&!piece.isEmpty())synchronized(generationRaw){generationRaw.append(piece);}
                           runOnUiThread(() -> { try {
                               String raw; synchronized(generationRaw){raw=generationRaw.toString();} ThinkingParser.Parts parts=ThinkingParser.split(raw); lastThinking=parts.thinking;
-                              renderThinking(lastThinking,!done||thinkingExpanded);
+                              if(done){
+                                  // Collapse on completion; the user can tap it to expand later.
+                                  renderThinking(lastThinking,false);
+                              }else if(!lastThinking.trim().isEmpty()){
+                                  // Stream plain text while generating to avoid allocating a full
+                                  // Markdown Spannable on every token.
+                                  thinking.setVisibility(View.VISIBLE);
+                                  thinking.setText("🧠  Thinking\\n\\n"+lastThinking);
+                              }
                               // Keep streaming rendering cheap: do not rebuild the full Markdown
                               // Spannable on every token. Render the final answer as Markdown once.
                               if(done){
