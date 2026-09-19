@@ -174,10 +174,14 @@ jobs:
           # Build optimized ARM kernels with runtime CPU-variant dispatch.
           # This avoids illegal-instruction crashes on devices that do not
           # support every newer ARM extension (for example i8mm).
+          # Keep the CPU backend statically linked into the APK.
+          # Dynamic GGML backends are not automatically packaged by Android Gradle.
+          # Use the portable armv8-a baseline to avoid SIGILL on older ARM64 phones.
           set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-          set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
-          set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
-          set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+          set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+          set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
+          set(GGML_CPU_ARM_ARCH "armv8-a" CACHE STRING "" FORCE)
+          set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
           set(LLAMA_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../../llama.cpp")
 
