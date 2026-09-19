@@ -357,6 +357,8 @@ jobs:
           import android.graphics.Typeface;
           import android.net.Uri;
           import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
           import android.provider.OpenableColumns;
           import android.view.Gravity;
           import android.view.View;
@@ -394,6 +396,9 @@ jobs:
                   private boolean followOutput=true, thinkingExpanded=true;
                   private String lastAnswer="", lastThinking="";
                   private final StringBuilder generationRaw=new StringBuilder();
+                  private final Handler mainHandler=new Handler(Looper.getMainLooper());
+                  private boolean uiUpdatePosted=false;
+                  private boolean terminalPosted=false;
 
               private int dp(float v) {
                   return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
@@ -653,40 +658,94 @@ jobs:
 
               private void sendMessage() {
                   if(!loaded)return; String prompt=input.getText().toString().trim(); if(prompt.isEmpty()||generating)return;
-                  input.setText(""); generating=true; followOutput=true; thinkingExpanded=true; lastAnswer=""; lastThinking=""; generationRaw.setLength(0); if(sendButton!=null)sendButton.setText("■");
+                  input.setText(""); generating=true; followOutput=true; thinkingExpanded=true; lastAnswer=""; lastThinking=""; generationRaw.setLength(0);
+                  uiUpdatePosted=false; terminalPosted=false; if(sendButton!=null)sendButton.setText("■");
                   chatScroll.setVisibility(View.VISIBLE); copyButton.setVisibility(View.GONE); emptyTitle.setVisibility(View.GONE); emptyText.setVisibility(View.GONE); modelButton.setVisibility(View.GONE);
                   final String header=chat.getText().toString().isEmpty()?"":chat.getText().toString()+"\n\n"; chat.setText(header+"You\n"+prompt+"\n\nAssistant\n");
                   String[] roles=new String[]{"user"}; String[] contents=new String[]{prompt};
                   new Thread(() -> {
                       boolean ok=NativeBridge.nativeGenerateChat(roles,contents,maxTokens,temperature,topP,topK,minP,seed,useJinja,enableThinking,systemPrompt,(piece,done) -> {
-                          if(piece!=null&&!piece.isEmpty())synchronized(generationRaw){generationRaw.append(piece);}
-                          runOnUiThread(() -> { try {
-                              String raw; synchronized(generationRaw){raw=generationRaw.toString();} ThinkingParser.Parts parts=ThinkingParser.split(raw); lastThinking=parts.thinking;
-                              if(done){
-                                  // Collapse on completion; the user can tap it to expand later.
-                                  renderThinking(lastThinking,false);
-                              }else if(!lastThinking.trim().isEmpty()){
-                                  // Stream plain text while generating to avoid allocating a full
-                                  // Markdown Spannable on every token.
-                                  thinking.setVisibility(View.VISIBLE);
-                                  thinking.setText("🧠  Thinking\\n\\n"+lastThinking);
-                              }
-                              // Keep streaming rendering cheap: do not rebuild the full Markdown
-                              // Spannable on every token. Render the final answer as Markdown once.
-                              if(done){
-                                  SpannableStringBuilder cb=new SpannableStringBuilder();
-                                  cb.append(header).append("You\n").append(MarkdownRenderer.render(prompt))
-                                    .append("\n\nAssistant\n").append(MarkdownRenderer.render(parts.answer));
-                                  chat.setText(cb);
-                              }else{
-                                  chat.setText(header+"You\\n"+prompt+"\\n\\nAssistant\\n"+parts.answer);
-                              }
-                              if(followOutput)chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
-                              if(done){thinkingExpanded=false;renderThinking(lastThinking,false);lastAnswer=parts.answer;copyButton.setVisibility(lastAnswer.trim().isEmpty()?View.GONE:View.VISIBLE);generating=false;if(sendButton!=null)sendButton.setText("➤");}
-                          }catch(Throwable ui){android.util.Log.e("PocketPalUI","render",ui);} });
+                          if(piece!=null&&!piece.isEmpty()) synchronized(generationRaw){generationRaw.append(piece);}
+                          if(done){
+                              if(terminalPosted)return;
+                              terminalPosted=true;
+                              mainHandler.post(() -> finalizeGeneration(header,prompt));
+                              return;
+                          }
+                          // Do not enqueue one UI runnable per token. A fast model can
+                          // otherwise flood the main looper and make the final transition
+                          // race with the pending token renders.
+                          if(!uiUpdatePosted){
+                              uiUpdatePosted=true;
+                              mainHandler.postDelayed(() -> {
+                                  uiUpdatePosted=false;
+                                  renderGenerationSnapshot(header,prompt,false);
+                              },50);
+                          }
                       });
-                      if(!ok)runOnUiThread(() -> {generating=false;if(sendButton!=null)sendButton.setText("➤");if(generationRaw.length()==0)chat.append("\n[Native inference error]");});
+                      if(!ok)mainHandler.post(() -> {
+                          if(!terminalPosted){
+                              terminalPosted=true;
+                              finalizeGeneration(header,prompt);
+                          }
+                          if(generationRaw.length()==0)chat.append("\n[Native inference error]");
+                      });
                   },"llama-generate").start();
+              }
+              private void renderGenerationSnapshot(String header,String prompt,boolean finalFrame){
+                  try{
+                      String raw;
+                      synchronized(generationRaw){raw=generationRaw.toString();}
+                      ThinkingParser.Parts parts=ThinkingParser.split(raw);
+                      lastThinking=parts.thinking;
+                      if(!lastThinking.trim().isEmpty()){
+                          thinking.setVisibility(View.VISIBLE);
+                          // Keep thinking plain while streaming. Markdown is only parsed after
+                          // generation is fully finished, avoiding span/layout churn.
+                          thinking.setText("🧠  Thinking\n\n"+lastThinking);
+                      }else{
+                          thinking.setVisibility(View.GONE);
+                      }
+                      chat.setText(header+"You\n"+prompt+"\n\nAssistant\n"+parts.answer);
+                      if(followOutput)chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+                  }catch(Throwable ui){
+                      android.util.Log.e("PocketPalUI","stream render",ui);
+                  }
+              }
+              private void finalizeGeneration(String header,String prompt){
+                  try{
+                      String raw;
+                      synchronized(generationRaw){raw=generationRaw.toString();}
+                      ThinkingParser.Parts parts=ThinkingParser.split(raw);
+                      lastThinking=parts.thinking;
+                      lastAnswer=parts.answer;
+                      // Terminal UI is deliberately simple: no Markdown parser is involved
+                      // in the thinking-collapse transition itself.
+                      if(lastThinking.trim().isEmpty()){
+                          thinking.setVisibility(View.GONE);
+                      }else{
+                          thinkingExpanded=false;
+                          thinking.setVisibility(View.VISIBLE);
+                          thinking.setText("Thinking  >");
+                      }
+                      try{
+                          SpannableStringBuilder cb=new SpannableStringBuilder();
+                          cb.append(header).append("You\n").append(MarkdownRenderer.render(prompt))
+                            .append("\n\nAssistant\n").append(MarkdownRenderer.render(lastAnswer));
+                          chat.setText(cb);
+                      }catch(Throwable markdown){
+                          android.util.Log.e("PocketPalUI","final markdown",markdown);
+                          chat.setText(header+"You\n"+prompt+"\n\nAssistant\n"+lastAnswer);
+                      }
+                      if(followOutput)chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+                      copyButton.setVisibility(lastAnswer.trim().isEmpty()?View.GONE:View.VISIBLE);
+                      generating=false;
+                      if(sendButton!=null)sendButton.setText("➤");
+                  }catch(Throwable ui){
+                      android.util.Log.e("PocketPalUI","finalize",ui);
+                      generating=false;
+                      if(sendButton!=null)sendButton.setText("➤");
+                  }
               }
               private void stopGeneration(){if(generating)NativeBridge.nativeStop();}
               private void renderThinking(String value,boolean expanded){if(value==null||value.trim().isEmpty()){thinking.setVisibility(View.GONE);return;}thinking.setVisibility(View.VISIBLE);if(expanded){SpannableStringBuilder b=new SpannableStringBuilder("🧠  Thinking\n\n");b.append(MarkdownRenderer.render(value));thinking.setText(b);}else thinking.setText("Thinking  >");}
@@ -735,6 +794,7 @@ jobs:
               @Override protected void onDestroy() {
                   super.onDestroy();
                   if (generating) NativeBridge.nativeStop();
+                  mainHandler.removeCallbacksAndMessages(null);
                   NativeBridge.nativeFree();
               }
           }
@@ -756,7 +816,7 @@ jobs:
           #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR,TAG,__VA_ARGS__)
           static llama_model*g_model=nullptr;static llama_context*g_ctx=nullptr;static std::mutex g_mutex;static std::atomic<bool> g_stop{false};
           static std::string js(JNIEnv*e,jstring s){if(!s)return"";const char*p=e->GetStringUTFChars(s,nullptr);std::string r=p?p:"";if(p)e->ReleaseStringUTFChars(s,p);return r;}
-          static bool emit(JNIEnv*e,jobject cb,jmethodID mid,const std::string&s,bool done){jstring x=e->NewStringUTF(s.c_str());e->CallVoidMethod(cb,mid,x,done?JNI_TRUE:JNI_FALSE);e->DeleteLocalRef(x);return!e->ExceptionCheck();}
+          static bool emit(JNIEnv*e,jobject cb,jmethodID mid,const std::string&s,bool done){jstring x=e->NewStringUTF(s.c_str());if(!x)return false;e->CallVoidMethod(cb,mid,x,done?JNI_TRUE:JNI_FALSE);e->DeleteLocalRef(x);if(e->ExceptionCheck()){LOGE("JNI callback exception (done=%d)",done?1:0);e->ExceptionDescribe();e->ExceptionClear();return false;}return true;}
           extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeLoad(JNIEnv*e,jclass,jstring path,jint nctx,jint threads,jint bt,jint batch,jboolean flash,jboolean mmap,jboolean mlock){
            std::lock_guard<std::mutex>lk(g_mutex);g_stop=false;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}if(g_model){llama_model_free(g_model);g_model=nullptr;}llama_backend_init();
            llama_model_params mp=llama_model_default_params();mp.n_gpu_layers=0;mp.load_mode=mmap?(mlock?LLAMA_LOAD_MODE_MMAP_MLOCK:LLAMA_LOAD_MODE_MMAP):(mlock?LLAMA_LOAD_MODE_MLOCK:LLAMA_LOAD_MODE_NONE);std::string p=js(e,path);g_model=llama_model_load_from_file(p.c_str(),mp);
@@ -768,7 +828,7 @@ jobs:
           extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeStop(JNIEnv*,jclass){g_stop=true;}
           extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeFree(JNIEnv*,jclass){std::lock_guard<std::mutex>lk(g_mutex);g_stop=true;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}if(g_model){llama_model_free(g_model);g_model=nullptr;}}
           extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeGenerateChat(JNIEnv*e,jclass,jobjectArray jr,jobjectArray jc,jint maxTok,jfloat temp,jfloat topP,jint topK,jfloat minP,jlong seed,jboolean useJinja,jboolean enableThinking,jstring jsystem,jobject cb){
-           std::lock_guard<std::mutex>lk(g_mutex);if(!g_model||!g_ctx||!cb)return JNI_FALSE;g_stop=false;jclass cls=e->GetObjectClass(cb);jmethodID mid=e->GetMethodID(cls,"emit","(Ljava/lang/String;Z)V");if(!mid)return JNI_FALSE;
+           std::lock_guard<std::mutex>lk(g_mutex);if(!g_model||!g_ctx||!cb)return JNI_FALSE;g_stop=false;jclass cls=e->GetObjectClass(cb);jmethodID mid=e->GetMethodID(cls,"emit","(Ljava/lang/String;Z)V");if(!mid){e->DeleteLocalRef(cls);return JNI_FALSE;}
            try{
             std::vector<common_chat_msg>msgs;std::string sys=js(e,jsystem);if(!sys.empty()){common_chat_msg m;m.role="system";m.content=sys;msgs.push_back(m);}jsize n=e->GetArrayLength(jr);
             for(jsize i=0;i<n;i++){jstring r=(jstring)e->GetObjectArrayElement(jr,i),c=(jstring)e->GetObjectArrayElement(jc,i);common_chat_msg m;m.role=js(e,r);m.content=js(e,c);msgs.push_back(m);e->DeleteLocalRef(r);e->DeleteLocalRef(c);}
@@ -780,7 +840,7 @@ jobs:
             for(size_t off=0;off<toks.size()&&!g_stop;){common_batch_clear(b);int take=(int)std::min((size_t)llama_n_batch(g_ctx),toks.size()-off);for(int i=0;i<take;i++)common_batch_add(b,toks[off+i],pos++,{0},off+i+1==toks.size());if(llama_decode(g_ctx,b)!=0){ok=false;break;}off+=take;}
             if(!ok){llama_batch_free(b);common_sampler_free(smp);emit(e,cb,mid,"",true);return JNI_FALSE;}
             if(g_stop){llama_batch_free(b);common_sampler_free(smp);emit(e,cb,mid,"",true);return JNI_TRUE;}
-            for(int step=0;step<std::max(1,(int)maxTok)&&!g_stop;step++){llama_token tok=common_sampler_sample(smp,g_ctx,-1);if(llama_vocab_is_eog(v,tok))break;common_sampler_accept(smp,tok,true);std::string piece=common_token_to_piece(v,tok,true);if(!piece.empty()&&!emit(e,cb,mid,piece,false))break;common_batch_clear(b);common_batch_add(b,tok,pos++,{0},true);if(llama_decode(g_ctx,b)!=0)break;}
+            bool stopped=false; bool eog=false; for(int step=0;step<std::max(1,(int)maxTok)&&!g_stop;step++){llama_token tok=common_sampler_sample(smp,g_ctx,-1);if(llama_vocab_is_eog(v,tok)){eog=true;break;}common_sampler_accept(smp,tok,true);std::string piece=common_token_to_piece(v,tok,true);if(!piece.empty()&&!emit(e,cb,mid,piece,false)){stopped=true;break;}common_batch_clear(b);common_batch_add(b,tok,pos++,{0},true);if(llama_decode(g_ctx,b)!=0){stopped=true;break;}} if(g_stop)stopped=true; LOGE("generation terminal: stopped=%d eog=%d",stopped?1:0,eog?1:0);
             llama_batch_free(b);common_sampler_free(smp);emit(e,cb,mid,"",true);return JNI_TRUE;
            }catch(const std::exception&x){LOGE("generation: %s",x.what());emit(e,cb,mid,"",true);return JNI_FALSE;}catch(...){LOGE("generation unknown error");emit(e,cb,mid,"",true);return JNI_FALSE;}
           }
