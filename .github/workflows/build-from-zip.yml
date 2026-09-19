@@ -893,6 +893,7 @@ jobs:
           #include <algorithm>
           #include <fstream>
           #include <ctime>
+          #include <cstdint>
           #include "llama.h"
           #include "common.h"
           #include "chat.h"
@@ -903,7 +904,36 @@ jobs:
           static std::mutex g_log_mutex;static std::string g_log_path;
           static void DLOG(const std::string&s){LOGE("%s",s.c_str());std::lock_guard<std::mutex>lk(g_log_mutex);if(g_log_path.empty())return;std::ofstream f(g_log_path,std::ios::app);if(f)f<<"["<<std::time(nullptr)<<"] "<<s<<"\n";}
           static std::string js(JNIEnv*e,jstring s){if(!s)return"";const char*p=e->GetStringUTFChars(s,nullptr);std::string r=p?p:"";if(p)e->ReleaseStringUTFChars(s,p);return r;}
-          static bool emit(JNIEnv*e,jobject cb,jmethodID mid,const std::string&s){jstring x=e->NewStringUTF(s.c_str());if(!x)return false;e->CallVoidMethod(cb,mid,x,JNI_FALSE);e->DeleteLocalRef(x);if(e->ExceptionCheck()){LOGE("JNI token callback exception");e->ExceptionDescribe();e->ExceptionClear();return false;}return true;}
+          static bool emit(JNIEnv*e,jobject cb,jmethodID mid,const std::string&s,std::string&pending){
+            pending+=s;std::u16string out;size_t i=0;
+            while(i<pending.size()){
+              const unsigned char c=(unsigned char)pending[i];uint32_t cp=0;int n=0;
+              if(c<0x80){cp=c;n=1;}
+              else if((c&0xE0)==0xC0){if(i+1>=pending.size())break;cp=c&0x1F;n=2;}
+              else if((c&0xF0)==0xE0){if(i+2>=pending.size())break;cp=c&0x0F;n=3;}
+              else if((c&0xF8)==0xF0){if(i+3>=pending.size())break;cp=c&0x07;n=4;}
+              else{cp=0xFFFD;n=1;}
+              if(n>1){
+                bool bad=false;for(int k=1;k<n;k++){unsigned char d=(unsigned char)pending[i+k];if((d&0xC0)!=0x80){bad=true;break;}cp=(cp<<6)|(d&0x3F);}
+                if(bad){cp=0xFFFD;n=1;}
+                else if((n==2&&cp<0x80)||(n==3&&cp<0x800)||(n==4&&cp<0x10000)||cp>0x10FFFF||(cp>=0xD800&&cp<=0xDFFF)){cp=0xFFFD;n=1;}
+              }
+              if(cp<=0xFFFF)out.push_back((char16_t)cp);
+              else{cp-=0x10000;out.push_back((char16_t)(0xD800+(cp>>10)));out.push_back((char16_t)(0xDC00+(cp&0x3FF)));}
+              i+=n;
+            }
+            if(i)pending.erase(0,i);
+            if(out.empty())return true;
+            jstring x=e->NewString(reinterpret_cast<const jchar*>(out.data()),(jsize)out.size());if(!x)return false;
+            e->CallVoidMethod(cb,mid,x,JNI_FALSE);e->DeleteLocalRef(x);
+            if(e->ExceptionCheck()){LOGE("JNI token callback exception");e->ExceptionDescribe();e->ExceptionClear();return false;}return true;
+          }
+          static bool flushUtf8(JNIEnv*e,jobject cb,jmethodID mid,std::string&pending){
+            if(pending.empty())return true;std::u16string out;out.push_back((char16_t)0xFFFD);pending.clear();
+            jstring x=e->NewString(reinterpret_cast<const jchar*>(out.data()),1);if(!x)return false;
+            e->CallVoidMethod(cb,mid,x,JNI_FALSE);e->DeleteLocalRef(x);
+            if(e->ExceptionCheck()){LOGE("JNI final UTF-8 callback exception");e->ExceptionDescribe();e->ExceptionClear();return false;}return true;
+          }
           extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeSetLogPath(JNIEnv*e,jclass,jstring path){std::lock_guard<std::mutex>lk(g_log_mutex);g_log_path=js(e,path);if(!g_log_path.empty()){std::ofstream f(g_log_path,std::ios::app);if(f)f<<"["<<std::time(nullptr)<<"] NATIVE LOG INITIALIZED\n";}}
           extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeLoad(JNIEnv*e,jclass,jstring path,jint nctx,jint threads,jint bt,jint batch,jboolean flash,jboolean mmap,jboolean mlock){
            std::lock_guard<std::mutex>lk(g_mutex);DLOG("nativeLoad ENTER");g_stop=false;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}g_chat_templates.reset();if(g_model){llama_model_free(g_model);g_model=nullptr;}llama_backend_init();DLOG("nativeLoad backend initialized");
@@ -930,7 +960,7 @@ jobs:
             if(!ok){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}
             if(g_stop){llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;}
             enum class EndReason { EOG, STOP, LIMIT, CALLBACK, DECODE_ERROR };
-            EndReason reason=EndReason::LIMIT;
+            EndReason reason=EndReason::LIMIT;std::string utf8Pending;
             for(int step=0;step<std::max(1,(int)maxTok);step++){
               if(g_stop){reason=EndReason::STOP;break;}
               llama_token tok=common_sampler_sample(smp,g_ctx,-1);
@@ -942,11 +972,12 @@ jobs:
               }
               common_sampler_accept(smp,tok,true);
               std::string piece=common_token_to_piece(v,tok,true);
-              if(!piece.empty()&&!emit(e,cb,mid,piece)){reason=EndReason::CALLBACK;break;}
+              if(!piece.empty()&&!emit(e,cb,mid,piece,utf8Pending)){reason=EndReason::CALLBACK;break;}
               common_batch_clear(b);
               common_batch_add(b,tok,pos++,{0},true);
               if(llama_decode(g_ctx,b)!=0){reason=EndReason::DECODE_ERROR;break;}
             }
+            if(!utf8Pending.empty()&&!flushUtf8(e,cb,mid,utf8Pending)){reason=EndReason::CALLBACK;}
             DLOG(std::string("generation: terminal cleanup begin reason=")+
                  (reason==EndReason::EOG?"EOG":
                   reason==EndReason::STOP?"STOP":
