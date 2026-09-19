@@ -664,7 +664,7 @@ jobs:
                   final String header=chat.getText().toString().isEmpty()?"":chat.getText().toString()+"\n\n"; chat.setText(header+"You\n"+prompt+"\n\nAssistant\n");
                   String[] roles=new String[]{"user"}; String[] contents=new String[]{prompt};
                   new Thread(() -> {
-                      boolean ok=NativeBridge.nativeGenerateChat(roles,contents,maxTokens,temperature,topK,minP,seed,useJinja,enableThinking,systemPrompt,(piece,done) -> {
+                      boolean ok=NativeBridge.nativeGenerateChat(roles,contents,maxTokens,temperature,topP,topK,minP,seed,useJinja,enableThinking,systemPrompt,(piece,done) -> {
                           if(piece!=null&&!piece.isEmpty()) synchronized(generationRaw){generationRaw.append(piece);}
                           // IMPORTANT: there is deliberately no terminal JNI callback.
                           // nativeGenerateChat now returns first; Java owns the terminal UI transition.
