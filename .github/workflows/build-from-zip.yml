@@ -461,7 +461,7 @@ jobs:
               private void applySystemBarInsets() {
                   if (root == null) return;
                   root.setOnApplyWindowInsetsListener((v, insets) -> {
-                      android.view.WindowInsets.Type t = android.view.WindowInsets.Type.systemBars();
+                      int t = android.view.WindowInsets.Type.systemBars();
                       android.graphics.Insets bars = insets.getInsets(t);
                       v.setPadding(v.getPaddingLeft(), bars.top, v.getPaddingRight(), bars.bottom);
                       return insets;
