@@ -246,187 +246,68 @@ jobs:
 
           cat > android/app/src/main/java/dev/pocketpal/local/MarkdownRenderer.java <<'EOF'
           package dev.pocketpal.local;
-
-          import android.graphics.Typeface;
-          import android.text.SpannableString;
+          import android.text.Html;
           import android.text.Spanned;
-          import android.text.style.*;
-          import android.graphics.Color;
-          import java.util.regex.*;
-
           public final class MarkdownRenderer {
-              private static final int MUTED = Color.rgb(160,160,170);
-              private static final int CODE_BG = Color.rgb(28,28,33);
-
-              private MarkdownRenderer() {}
-
-              public static SpannableString render(String src) {
-                  if (src == null) src = "";
-                  String normalized = src.replace("\r\n","\n").replace("\r","\n");
-                  StringBuilder out = new StringBuilder();
-                  java.util.ArrayList<Mark> marks = new java.util.ArrayList<>();
-                  String[] lines = normalized.split("\n",-1);
-                  boolean inCode = false;
-                  StringBuilder code = new StringBuilder();
-
-                  for (String line : lines) {
-                      if (line.trim().startsWith("```")) {
-                          if (inCode) {
-                              int st = out.length();
-                              out.append(code);
-                              if (code.length() > 0 && code.charAt(code.length()-1) == '\n') out.setLength(out.length()-1);
-                              marks.add(new Mark(st,out.length(),"code"));
-                              out.append('\n');
-                              code.setLength(0);
-                              inCode = false;
-                          } else {
-                              inCode = true;
-                              if (out.length() > 0 && out.charAt(out.length()-1) != '\n') out.append('\n');
-                          }
-                          continue;
-                      }
-                      if (inCode) {
-                          code.append(line).append('\n');
-                          continue;
-                      }
-                      if (line.matches("^#{1,6}\\s+.*")) {
-                          int n=0;
-                          while (n < line.length() && line.charAt(n) == '#') n++;
-                          int st=out.length();
-                          out.append(line.substring(n).trim()).append('\n');
-                          marks.add(new Mark(st,out.length()-1,"h"+n));
-                          continue;
-                      }
-                      if (line.matches("^\\s*>\\s?.*")) {
-                          int st=out.length();
-                          out.append("│ ").append(line.replaceFirst("^\\s*>\\s?","")).append('\n');
-                          marks.add(new Mark(st,out.length()-1,"quote"));
-                          continue;
-                      }
-                      if (line.matches("^\\s*[-*+]\\s+.*") || line.matches("^\\s*\\d+[.)]\\s+.*")) {
-                          line=line.replaceFirst("^\\s*([-*+]|\\d+[.)])\\s+","• ");
-                      }
-                      out.append(line).append('\n');
-                  }
-
-                  if (inCode && code.length() > 0) {
-                      int st=out.length();
-                      out.append(code);
-                      if (code.charAt(code.length()-1) == '\n') out.setLength(out.length()-1);
-                      marks.add(new Mark(st,out.length(),"code"));
-                  }
-                  if (out.length() > 0) out.setLength(out.length()-1);
-
-                  SpannableString sp = new SpannableString(out.toString());
-                  for (Mark m : marks) apply(sp,m);
-
-                  Matcher bold=Pattern.compile("\\*\\*(.+?)\\*\\*|__(.+?)__").matcher(sp);
-                  while (bold.find()) sp.setSpan(new StyleSpan(Typeface.BOLD),bold.start(),bold.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-
-                  Matcher italic=Pattern.compile("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)|(?<!_)_(.+?)_").matcher(sp);
-                  while (italic.find()) sp.setSpan(new StyleSpan(Typeface.ITALIC),italic.start(),italic.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-
-                  Matcher inline=Pattern.compile("`([^`]+)`").matcher(sp);
-                  while (inline.find()) {
-                      sp.setSpan(new TypefaceSpan(Typeface.MONOSPACE),inline.start(),inline.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                      sp.setSpan(new BackgroundColorSpan(CODE_BG),inline.start(),inline.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                  }
-                  return sp;
+            private MarkdownRenderer(){}
+            public static Spanned render(String src){
+              if(src==null)src="";
+              String[] lines=src.replace("\r","").split("\n",-1);
+              StringBuilder h=new StringBuilder(); boolean code=false;
+              for(int i=0;i<lines.length;i++){
+                String l=lines[i];
+                if(l.trim().startsWith("\u0060\u0060\u0060")){code=!code;h.append(code?"<pre>":"</pre>");continue;}
+                if(code){h.append(esc(l)).append("\n");continue;}
+                if(l.matches("^\\s*#{1,6}\\s+.*")){h.append("<b>").append(inline(l.replaceFirst("^\\s*#{1,6}\\s+",""))).append("</b><br>");}
+                else if(l.matches("^\\s*>\\s?.*")){h.append("│ ").append(inline(l.replaceFirst("^\\s*>\\s?",""))).append("<br>");}
+                else if(l.matches("^\\s*[-*+]\\s+.*")){h.append("• ").append(inline(l.replaceFirst("^\\s*[-*+]\\s+",""))).append("<br>");}
+                else if(l.matches("^\\s*\\d+[.)]\\s+.*")){h.append(inline(l.replaceFirst("^\\s*(\\d+)[.)]\\s+","$1. "))).append("<br>");}
+                else {h.append(inline(l));if(i+1<lines.length)h.append("<br>");}
               }
-
-              private static void apply(SpannableString sp, Mark m) {
-                  if (m.end <= m.start) return;
-                  int f=Spanned.SPAN_EXCLUSIVE_EXCLUSIVE;
-                  if (m.kind.equals("code")) {
-                      sp.setSpan(new TypefaceSpan(Typeface.MONOSPACE),m.start,m.end,f);
-                      sp.setSpan(new BackgroundColorSpan(CODE_BG),m.start,m.end,f);
-                  } else if (m.kind.equals("quote")) {
-                      sp.setSpan(new ForegroundColorSpan(MUTED),m.start,m.end,f);
-                  } else if (m.kind.startsWith("h")) {
-                      sp.setSpan(new StyleSpan(Typeface.BOLD),m.start,m.end,f);
-                      int n=Integer.parseInt(m.kind.substring(1));
-                      sp.setSpan(new RelativeSizeSpan(n<=2?1.28f:1.12f),m.start,m.end,f);
-                  }
-              }
-
-              private static final class Mark {
-                  final int start,end; final String kind;
-                  Mark(int s,int e,String k){start=s;end=e;kind=k;}
-              }
+              return Html.fromHtml(h.toString(),Html.FROM_HTML_MODE_LEGACY);
+            }
+            private static String esc(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
+            private static String inline(String s){
+              s=esc(s);
+              s=s.replaceAll("\\*\\*(.+?)\\*\\*","<b>$1</b>");
+              s=s.replaceAll("__(.+?)__","<b>$1</b>");
+              s=s.replaceAll("\u0060([^\u0060]+)\u0060","<font face='monospace'>$1</font>");
+              s=s.replaceAll("(?<!\\*)\\*([^*]+)\\*(?!\\*)","<i>$1</i>");
+              s=s.replaceAll("(?<!_)_([^_]+)_(?!_)","<i>$1</i>");
+              return s;
+            }
           }
+
           EOF
 
           cat > android/app/src/main/java/dev/pocketpal/local/ThinkingParser.java <<'EOF'
-                    package dev.pocketpal.local;
+          package dev.pocketpal.local;
+          public final class ThinkingParser {
+           public static final class Parts{public final String thinking,answer;public final boolean active;Parts(String t,String a,boolean x){thinking=t;answer=a;active=x;}}
+           private ThinkingParser(){}
+           public static Parts split(String text){
+            if(text==null)text="";
+            String[][] p={{"<think>","</think>"},{"<thinking>","</thinking>"},{"<|thinking|>","<|end_thinking|>"},{"<|begin_of_thought|>","<|end_of_thought|>"},{"<|begin_of_thinking|>","<|end_of_thinking|>"}};
+            for(String[] x:p){int a=text.indexOf(x[0]);if(a>=0){int st=a+x[0].length(),b=text.indexOf(x[1],st);if(b>=0)return new Parts(text.substring(st,b).trim(),text.substring(b+x[1].length()).trim(),false);return new Parts(text.substring(st).trim(),"",true);}}
+            return new Parts("",text,false);
+           }
+          }
 
-                    public final class ThinkingParser {
-                        public static final class Parts {
-                            public final String thinking;
-                            public final String answer;
-                            public final boolean thinkingActive;
-
-                            Parts(String t, String a, boolean active) {
-                                thinking=t;
-                                answer=a;
-                                thinkingActive=active;
-                            }
-                        }
-
-                        private ThinkingParser() {}
-
-                        public static Parts split(String text) {
-                            if (text == null) text = "";
-                            int open=text.indexOf("<think>");
-                            int close=text.indexOf("</think>");
-                            if (open >= 0) {
-                                int start=open+7;
-                                if (close >= start) {
-                                    return new Parts(text.substring(start,close).trim(),
-                                            text.substring(close+8).trim(),false);
-                                }
-                                return new Parts(text.substring(start).trim(),"",true);
-                            }
-
-                            open=text.indexOf("<thinking>");
-                            close=text.indexOf("</thinking>");
-                            if (open >= 0) {
-                                int start=open+10;
-                                if (close >= start) {
-                                    return new Parts(text.substring(start,close).trim(),
-                                            text.substring(close+11).trim(),false);
-                                }
-                                return new Parts(text.substring(start).trim(),"",true);
-                            }
-
-                            return new Parts("",text,false);
-                        }
-                    }
           EOF
 
                     cat > android/app/src/main/java/dev/pocketpal/local/NativeBridge.java <<'EOF'
-                    package dev.pocketpal.local;
+          package dev.pocketpal.local;
+          public final class NativeBridge {
+           static{System.loadLibrary("pocketpal_local");}
+           private NativeBridge(){}
+           public static native boolean nativeLoad(String path,int nctx,int threads,int batchThreads,int batch,boolean flash,boolean mmap,boolean mlock);
+           public static native String nativeTemplate();
+           public static native void nativeStop();
+           public static native void nativeFree();
+           public static native boolean nativeGenerateChat(String[] roles,String[] contents,int maxTokens,float temperature,float topP,int topK,float minP,long seed,boolean useJinja,boolean enableThinking,String systemPrompt,TokenCallback callback);
+          }
+          interface TokenCallback{void emit(String text,boolean done);}
 
-                    public final class NativeBridge {
-                        static { System.loadLibrary("pocketpal_local"); }
-                        private NativeBridge() {}
-
-                        public static native boolean nativeLoad(
-                                String path, int nctx, int threads, int batchThreads, int batch,
-                                boolean flash, boolean mmap, boolean mlock);
-
-                        public static native String nativeTemplate();
-                        public static native void nativeStop();
-                        public static native void nativeFree();
-
-                        public static native boolean nativeGenerateChat(
-                                String[] roles, String[] contents, int maxTokens,
-                                float temperature, float topP, int topK, float minP, long seed,
-                                TokenCallback callback);
-                    }
-
-                    interface TokenCallback {
-                        void emit(String text, boolean done);
-                    }
           EOF
 
           cat > android/app/src/main/java/dev/pocketpal/local/MainActivity.java <<'EOF'
@@ -816,29 +697,94 @@ jobs:
           }
           EOF
 
+          cat > android/app/src/main/cpp/LlamaEngine.cpp <<'EOF'
+          #include <jni.h>
+          #include <android/log.h>
+          #include <atomic>
+          #include <mutex>
+          #include <string>
+          #include <vector>
+          #include <algorithm>
+          #include "llama.h"
+          #include "common.h"
+          #include "chat.h"
+          #include "sampling.h"
+          #define TAG "PocketPalNative"
+          #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR,TAG,__VA_ARGS__)
+          static llama_model*g_model=nullptr;static llama_context*g_ctx=nullptr;static std::mutex g_mutex;static std::atomic<bool> g_stop{false};
+          static std::string js(JNIEnv*e,jstring s){if(!s)return"";const char*p=e->GetStringUTFChars(s,nullptr);std::string r=p?p:"";if(p)e->ReleaseStringUTFChars(s,p);return r;}
+          static bool emit(JNIEnv*e,jobject cb,jmethodID mid,const std::string&s,bool done){jstring x=e->NewStringUTF(s.c_str());e->CallVoidMethod(cb,mid,x,done?JNI_TRUE:JNI_FALSE);e->DeleteLocalRef(x);return!e->ExceptionCheck();}
+          extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeLoad(JNIEnv*e,jclass,jstring path,jint nctx,jint threads,jint bt,jint batch,jboolean flash,jboolean mmap,jboolean mlock){
+           std::lock_guard<std::mutex>lk(g_mutex);g_stop=false;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}if(g_model){llama_model_free(g_model);g_model=nullptr;}llama_backend_init();
+           llama_model_params mp=llama_model_default_params();mp.n_gpu_layers=0;mp.load_mode=mmap?(mlock?LLAMA_LOAD_MODE_MMAP_MLOCK:LLAMA_LOAD_MODE_MMAP):(mlock?LLAMA_LOAD_MODE_MLOCK:LLAMA_LOAD_MODE_NONE);std::string p=js(e,path);g_model=llama_model_load_from_file(p.c_str(),mp);
+           if(!g_model&&mlock){mp.load_mode=mmap?LLAMA_LOAD_MODE_MMAP:LLAMA_LOAD_MODE_NONE;g_model=llama_model_load_from_file(p.c_str(),mp);}if(!g_model)return JNI_FALSE;
+           llama_context_params cp=llama_context_default_params();cp.n_ctx=(uint32_t)std::max(512,(int)nctx);cp.n_batch=(uint32_t)std::max(32,(int)batch);cp.n_ubatch=std::min(cp.n_batch,512u);cp.n_threads=std::max(1,(int)threads);cp.n_threads_batch=std::max(1,(int)bt);cp.flash_attn_type=flash?LLAMA_FLASH_ATTN_TYPE_ENABLED:LLAMA_FLASH_ATTN_TYPE_DISABLED;cp.offload_kqv=false;g_ctx=llama_init_from_model(g_model,cp);
+           if(!g_ctx){llama_model_free(g_model);g_model=nullptr;return JNI_FALSE;}return JNI_TRUE;
+          }
+          extern "C" JNIEXPORT jstring JNICALL Java_dev_pocketpal_local_NativeBridge_nativeTemplate(JNIEnv*e,jclass){std::lock_guard<std::mutex>lk(g_mutex);const char*t=g_model?llama_model_chat_template(g_model,nullptr):nullptr;return e->NewStringUTF(t?t:"");}
+          extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeStop(JNIEnv*,jclass){g_stop=true;}
+          extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeFree(JNIEnv*,jclass){std::lock_guard<std::mutex>lk(g_mutex);g_stop=true;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}if(g_model){llama_model_free(g_model);g_model=nullptr;}}
+          extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeGenerateChat(JNIEnv*e,jclass,jobjectArray jr,jobjectArray jc,jint maxTok,jfloat temp,jfloat topP,jint topK,jfloat minP,jlong seed,jboolean useJinja,jboolean enableThinking,jstring jsystem,jobject cb){
+           std::lock_guard<std::mutex>lk(g_mutex);if(!g_model||!g_ctx||!cb)return JNI_FALSE;g_stop=false;jclass cls=e->GetObjectClass(cb);jmethodID mid=e->GetMethodID(cls,"emit","(Ljava/lang/String;Z)V");if(!mid)return JNI_FALSE;
+           try{
+            std::vector<common_chat_msg>msgs;std::string sys=js(e,jsystem);if(!sys.empty()){common_chat_msg m;m.role="system";m.content=sys;msgs.push_back(m);}jsize n=e->GetArrayLength(jr);
+            for(jsize i=0;i<n;i++){jstring r=(jstring)e->GetObjectArrayElement(jr,i),c=(jstring)e->GetObjectArrayElement(jc,i);common_chat_msg m;m.role=js(e,r);m.content=js(e,c);msgs.push_back(m);e->DeleteLocalRef(r);e->DeleteLocalRef(c);}
+            auto tmpls=common_chat_templates_init(g_model,"");if(!tmpls)return JNI_FALSE;common_chat_templates_inputs in;in.messages=msgs;in.add_generation_prompt=true;in.use_jinja=useJinja;in.enable_thinking=enableThinking;in.reasoning_format=COMMON_REASONING_FORMAT_DEEPSEEK;
+            common_chat_params formatted=common_chat_templates_apply(tmpls.get(),in);if(formatted.prompt.empty())return JNI_FALSE;const llama_vocab*v=llama_model_get_vocab(g_model);std::vector<llama_token>toks=common_tokenize(v,formatted.prompt,true,true);if(toks.empty())return JNI_FALSE;if((int)toks.size()+2>=(int)llama_n_ctx(g_ctx))return JNI_FALSE;
+            llama_memory_t mem=llama_get_memory(g_ctx);if(mem)llama_memory_clear(mem,true);
+            common_params_sampling sp;sp.seed=seed<0?LLAMA_DEFAULT_SEED:(uint32_t)seed;sp.temp=std::max(0.0f,(float)temp);sp.top_p=std::clamp((float)topP,0.0f,1.0f);sp.top_k=std::max(0,(int)topK);sp.min_p=std::clamp((float)minP,0.0f,1.0f);sp.samplers={COMMON_SAMPLER_TYPE_TOP_K,COMMON_SAMPLER_TYPE_TOP_P,COMMON_SAMPLER_TYPE_MIN_P,COMMON_SAMPLER_TYPE_TEMPERATURE};common_sampler*smp=common_sampler_init(g_model,sp);if(!smp)return JNI_FALSE;
+            llama_batch b=llama_batch_init((int32_t)std::min((size_t)llama_n_batch(g_ctx),toks.size()),0,1);int pos=0;bool ok=true;
+            for(size_t off=0;off<toks.size()&&!g_stop;){common_batch_clear(b);int take=(int)std::min((size_t)llama_n_batch(g_ctx),toks.size()-off);for(int i=0;i<take;i++)common_batch_add(b,toks[off+i],pos++,{0},off+i+1==toks.size());if(llama_decode(g_ctx,b)!=0){ok=false;break;}off+=take;}
+            if(!ok||g_stop){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}
+            for(int step=0;step<std::max(1,(int)maxTok)&&!g_stop;step++){llama_token tok=common_sampler_sample(smp,g_ctx,-1);if(llama_vocab_is_eog(v,tok))break;common_sampler_accept(smp,tok,true);std::string piece=common_token_to_piece(v,tok,true);if(!piece.empty()&&!emit(e,cb,mid,piece,false))break;common_batch_clear(b);common_batch_add(b,tok,pos++,{0},true);if(llama_decode(g_ctx,b)!=0)break;}
+            llama_batch_free(b);common_sampler_free(smp);emit(e,cb,mid,"",true);return JNI_TRUE;
+           }catch(const std::exception&x){LOGE("generation: %s",x.what());emit(e,cb,mid,"",true);return JNI_FALSE;}catch(...){LOGE("generation unknown error");emit(e,cb,mid,"",true);return JNI_FALSE;}
+          }
+
+          EOF
+
           python3 - <<'PY'
           from pathlib import Path
-          import re
-          p = Path("android/app/src/main/cpp/LlamaEngine.cpp")
-          s = p.read_text()
-          s = s.replace('#include "chat.h"', '#include "chat.h"\n#include "common.h"')
-          s = s.replace('mp.use_mmap = mmap;\n    mp.use_mlock = mlock;',
-                        'mp.load_mode = mmap ? (mlock ? LLAMA_LOAD_MODE_MMAP_MLOCK : LLAMA_LOAD_MODE_MMAP)\n                         : (mlock ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE);')
-          pat = r'static bool decode_prompt\s*\([^)]*\)\s*\{.*?\n\}'
-          repl = '''static bool decode_prompt(const std::string & prompt, std::vector<llama_token> & tokens) {
-              const llama_vocab * vocab = llama_model_get_vocab(g_model);
-              if (!vocab || prompt.empty()) return false;
-              tokens = common_tokenize(vocab, prompt, true, true);
-              return !tokens.empty();
-          }'''
-          s, n = re.subn(pat, repl, s, count=1, flags=re.S)
-          if n != 1: raise SystemExit("decode_prompt not found")
-          s = s.replace('cp.n_batch = (uint32_t)batch;', 'cp.n_batch = (uint32_t)batch;')
-          s = s.replace('render_chat(msgs, true, true)', 'render_chat(msgs, true, false)')
-          s = s.replace('llama_sampler_init_dist((uint32_t)seed)', 'llama_sampler_init_dist(seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t)seed)')
+          p=Path("android/app/src/main/java/dev/pocketpal/local/MainActivity.java")
+          s=p.read_text()
+          s=s.replace("import android.widget.Button;\n","import android.widget.Button;\nimport android.widget.CheckBox;\nimport android.text.InputType;\nimport android.text.SpannableStringBuilder;\n")
+          s=s.replace("private File modelFile;\n","""private File modelFile;
+          private int context=8192,threads=4,batchThreads=8,batch=512,maxTokens=1024;
+          private float temperature=0.7f,topP=0.95f,minP=0.05f; private int topK=40; private long seed=-1L;
+          private boolean useJinja=true,enableThinking=true,flashAttention=true,mmap=true,mlock=false; private String systemPrompt="";
+          """)
+          s=s.replace("""roles, contents, 1024, 0.7f, 0.95f, 40, 0.05f, -1L,
+                                        (piece, done) -> {""","""roles, contents, maxTokens, temperature, topP, topK, minP, seed,
+                                        useJinja, enableThinking, systemPrompt,
+                                        (piece, done) -> {""")
+          start=s.index("private void showSettings() {")
+          end=s.index("\n              @Override protected void onDestroy()",start)
+          settings="""private EditText sf(String h,String v,int t){EditText e=new EditText(this);e.setHint(h);e.setText(v);e.setTextColor(TEXT);e.setHintTextColor(MUTED);e.setInputType(t);return e;}
+          private CheckBox sc(String h,boolean v){CheckBox c=new CheckBox(this);c.setText(h);c.setTextColor(TEXT);c.setChecked(v);return c;}
+          private int cl(int v,int a,int b){return Math.max(a,Math.min(b,v));} private float cf(float v,float a,float b){return Math.max(a,Math.min(b,v));}
+          private void showSettings(){
+           ScrollView sv=new ScrollView(this);LinearLayout b=new LinearLayout(this);b.setOrientation(LinearLayout.VERTICAL);b.setPadding(dp(18),dp(8),dp(18),dp(8));sv.addView(b);
+           CheckBox j=sc("Use Jinja chat template",useJinja),thk=sc("Enable thinking / reasoning",enableThinking),fl=sc("Flash Attention",flashAttention),mm=sc("MMap model file",mmap),ram=sc("Keep model in RAM (MLOCK)",mlock);
+           b.addView(j);b.addView(thk);b.addView(fl);b.addView(mm);b.addView(ram);
+           EditText c=sf("Context",String.valueOf(context),2),t=sf("Generation threads",String.valueOf(threads),2),bt=sf("Prompt threads",String.valueOf(batchThreads),2),ba=sf("Batch",String.valueOf(batch),2),mx=sf("Max output tokens",String.valueOf(maxTokens),2),te=sf("Temperature",String.valueOf(temperature),8194),tp=sf("Top P",String.valueOf(topP),8194),tk=sf("Top K",String.valueOf(topK),2),mp=sf("Min P",String.valueOf(minP),8194),se=sf("Seed (-1=random)",String.valueOf(seed),4098),sy=sf("System prompt",systemPrompt,InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+           sy.setMinLines(3);b.addView(c);b.addView(t);b.addView(bt);b.addView(ba);b.addView(mx);b.addView(te);b.addView(tp);b.addView(tk);b.addView(mp);b.addView(se);b.addView(sy);
+           new AlertDialog.Builder(this).setTitle("Local model settings").setView(sv).setPositiveButton("Apply",(d,w)->{try{
+            context=cl(Integer.parseInt(c.getText().toString()),512,131072);threads=cl(Integer.parseInt(t.getText().toString()),1,32);batchThreads=cl(Integer.parseInt(bt.getText().toString()),1,32);batch=cl(Integer.parseInt(ba.getText().toString()),32,4096);maxTokens=cl(Integer.parseInt(mx.getText().toString()),1,8192);
+            temperature=cf(Float.parseFloat(te.getText().toString()),0,2);topP=cf(Float.parseFloat(tp.getText().toString()),0,1);topK=cl(Integer.parseInt(tk.getText().toString()),0,200);minP=cf(Float.parseFloat(mp.getText().toString()),0,1);seed=Long.parseLong(se.getText().toString());systemPrompt=sy.getText().toString();
+            useJinja=j.isChecked();enableThinking=thk.isChecked();flashAttention=fl.isChecked();mmap=mm.isChecked();mlock=ram.isChecked();if(modelFile!=null&&loaded)loadModel();
+           }catch(Exception e){Toast.makeText(this,"Invalid settings: "+e.getMessage(),Toast.LENGTH_LONG).show();}}).setNegativeButton("Cancel",null).show();
+          }
+          """
+          s=s[:start]+settings+s[end:]
+          # Replace the old string-concatenation rendering with Spannable-safe rendering.
+          s=s.replace('''thinking.setText(parts.thinking.isEmpty() ? "" : "🧠  Thinking\\n\\n" + MarkdownRenderer.render(parts.thinking));
+                                                thinking.setVisibility(parts.thinking.isEmpty() ? View.GONE : View.VISIBLE);
+                                                chat.setText(header + "You\\n" + MarkdownRenderer.render(prompt) + "\\n\\nAssistant\\n" + MarkdownRenderer.render(parts.answer));''','''if(parts.thinking.isEmpty()) thinking.setVisibility(View.GONE);
+                                                else { SpannableStringBuilder tb=new SpannableStringBuilder("🧠  Thinking\\n\\n"); tb.append(MarkdownRenderer.render(parts.thinking)); thinking.setText(tb); thinking.setVisibility(View.VISIBLE); }
+                                                SpannableStringBuilder cb=new SpannableStringBuilder(); cb.append(header).append("You\\n").append(MarkdownRenderer.render(prompt)).append("\\n\\nAssistant\\n").append(MarkdownRenderer.render(parts.answer)); chat.setText(cb);''')
           p.write_text(s)
-          PY
 
+          PY
           cat > android/README.md <<'EOF'
           # PocketPal Local — Native Android
 
