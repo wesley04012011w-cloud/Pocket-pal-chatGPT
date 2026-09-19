@@ -713,39 +713,19 @@ jobs:
                   }
               }
               private void finalizeGeneration(String header,String prompt){
+                  // Terminal path is intentionally minimal. Natural EOG and manual STOP
+                  // both end here without re-parsing or re-rendering the final transcript.
                   try{
-                      String raw;
-                      synchronized(generationRaw){raw=generationRaw.toString();}
-                      ThinkingParser.Parts parts=ThinkingParser.split(raw);
-                      lastThinking=parts.thinking;
-                      lastAnswer=parts.answer;
-                      // Terminal UI is deliberately simple: no Markdown parser is involved
-                      // in the thinking-collapse transition itself.
-                      if(lastThinking.trim().isEmpty()){
-                          thinking.setVisibility(View.GONE);
-                      }else{
+                      if(thinkingWasActive && !lastThinking.trim().isEmpty()){
+                          thinkingWasActive=false;
                           thinkingExpanded=false;
                           thinking.setVisibility(View.VISIBLE);
                           thinking.setText("Thinking  >");
                       }
-                      try{
-                          SpannableStringBuilder cb=new SpannableStringBuilder();
-                          cb.append(header).append("You\n").append(MarkdownRenderer.render(prompt))
-                            .append("\n\nAssistant\n").append(MarkdownRenderer.render(lastAnswer));
-                          chat.setText(cb);
-                      }catch(Throwable markdown){
-                          android.util.Log.e("PocketPalUI","final markdown",markdown);
-                          chat.setText(header+"You\n"+prompt+"\n\nAssistant\n"+lastAnswer);
-                      }
-                      if(followOutput)chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
                       copyButton.setVisibility(lastAnswer.trim().isEmpty()?View.GONE:View.VISIBLE);
-                      generating=false;
-                      if(sendButton!=null)sendButton.setText("➤");
-                  }catch(Throwable ui){
-                      android.util.Log.e("PocketPalUI","finalize",ui);
-                      generating=false;
-                      if(sendButton!=null)sendButton.setText("➤");
-                  }
+                  }catch(Throwable ui){ android.util.Log.e("PocketPalUI","terminal ui",ui); }
+                  generating=false;
+                  if(sendButton!=null)sendButton.setText("➤");
               }
               private void stopGeneration(){if(generating)NativeBridge.nativeStop();}
               private void renderThinking(String value,boolean expanded){if(value==null||value.trim().isEmpty()){thinking.setVisibility(View.GONE);return;}thinking.setVisibility(View.VISIBLE);if(expanded){SpannableStringBuilder b=new SpannableStringBuilder("🧠  Thinking\n\n");b.append(MarkdownRenderer.render(value));thinking.setText(b);}else thinking.setText("Thinking  >");}
