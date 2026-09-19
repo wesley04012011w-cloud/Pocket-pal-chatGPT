@@ -757,8 +757,8 @@ jobs:
                                         (piece, done) -> {""","""roles, contents, maxTokens, temperature, topP, topK, minP, seed,
                                         useJinja, enableThinking, systemPrompt,
                                         (piece, done) -> {""")
-          start=s.index("private void showSettings() {")
-          end=s.index("\n              @Override protected void onDestroy()",start)
+          start=s.index("private void showSettings()")
+          end=s.index("@Override protected void onDestroy()",start)
           settings="""private EditText sf(String h,String v,int t){EditText e=new EditText(this);e.setHint(h);e.setText(v);e.setTextColor(TEXT);e.setHintTextColor(MUTED);e.setInputType(t);return e;}
           private CheckBox sc(String h,boolean v){CheckBox c=new CheckBox(this);c.setText(h);c.setTextColor(TEXT);c.setChecked(v);return c;}
           private int cl(int v,int a,int b){return Math.max(a,Math.min(b,v));} private float cf(float v,float a,float b){return Math.max(a,Math.min(b,v));}
