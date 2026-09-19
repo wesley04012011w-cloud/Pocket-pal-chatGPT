@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  # Native UI source/icons are copied from native/android during project generation.
 
 jobs:
   build:
