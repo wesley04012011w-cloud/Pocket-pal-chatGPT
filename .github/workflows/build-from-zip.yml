@@ -393,7 +393,7 @@ jobs:
               private boolean loaded = false, generating = false;
               private File modelFile;
               private TextView copyButton, sendButton;
-                  private boolean followOutput=true, thinkingExpanded=true;
+                  private boolean followOutput=true, thinkingExpanded=true, thinkingWasActive=false;
                   private String lastAnswer="", lastThinking="";
                   private final StringBuilder generationRaw=new StringBuilder();
                   private final Handler mainHandler=new Handler(Looper.getMainLooper());
@@ -658,7 +658,7 @@ jobs:
 
               private void sendMessage() {
                   if(!loaded)return; String prompt=input.getText().toString().trim(); if(prompt.isEmpty()||generating)return;
-                  input.setText(""); generating=true; followOutput=true; thinkingExpanded=true; lastAnswer=""; lastThinking=""; generationRaw.setLength(0);
+                  input.setText(""); generating=true; followOutput=true; thinkingExpanded=true; thinkingWasActive=false; lastAnswer=""; lastThinking=""; generationRaw.setLength(0);
                   uiUpdatePosted=false; terminalPosted=false; if(sendButton!=null)sendButton.setText("■");
                   chatScroll.setVisibility(View.VISIBLE); copyButton.setVisibility(View.GONE); emptyTitle.setVisibility(View.GONE); emptyText.setVisibility(View.GONE); modelButton.setVisibility(View.GONE);
                   final String header=chat.getText().toString().isEmpty()?"":chat.getText().toString()+"\n\n"; chat.setText(header+"You\n"+prompt+"\n\nAssistant\n");
@@ -690,12 +690,20 @@ jobs:
                       synchronized(generationRaw){raw=generationRaw.toString();}
                       ThinkingParser.Parts parts=ThinkingParser.split(raw);
                       lastThinking=parts.thinking;
-                      if(!lastThinking.trim().isEmpty()){
+                      if(parts.active){
+                          thinkingWasActive=true;
                           thinking.setVisibility(View.VISIBLE);
                           // Keep thinking plain while streaming. Markdown is only parsed after
                           // generation is fully finished, avoiding span/layout churn.
                           thinking.setText("🧠  Thinking\n\n"+lastThinking);
-                      }else{
+                      }else if(thinkingWasActive && !lastThinking.trim().isEmpty()){
+                          // The closing </think> arrived: collapse immediately, without waiting
+                          // for nativeGenerateChat() to return.
+                          thinkingWasActive=false;
+                          thinkingExpanded=false;
+                          thinking.setVisibility(View.VISIBLE);
+                          thinking.setText("Thinking  >");
+                      }else if(lastThinking.trim().isEmpty()){
                           thinking.setVisibility(View.GONE);
                       }
                       chat.setText(header+"You\n"+prompt+"\n\nAssistant\n"+parts.answer);
@@ -745,7 +753,7 @@ jobs:
 
               private void newChat() {
                   if(generating)NativeBridge.nativeStop(); generating=false; if(sendButton!=null)sendButton.setText("➤");
-                  chat.setText(""); thinking.setText(""); thinking.setVisibility(View.GONE); copyButton.setVisibility(View.GONE); generationRaw.setLength(0); lastAnswer=""; lastThinking="";
+                  chat.setText(""); thinking.setText(""); thinking.setVisibility(View.GONE); thinkingWasActive=false; copyButton.setVisibility(View.GONE); generationRaw.setLength(0); lastAnswer=""; lastThinking="";
                   input.setText("");
                   chatScroll.setVisibility(View.GONE);
                   emptyTitle.setVisibility(View.VISIBLE);
@@ -833,7 +841,7 @@ jobs:
             if(!ok){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}
             if(g_stop){llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;}
             bool stopped=false; bool eog=false; for(int step=0;step<std::max(1,(int)maxTok)&&!g_stop;step++){llama_token tok=common_sampler_sample(smp,g_ctx,-1);if(llama_vocab_is_eog(v,tok)){eog=true;break;}common_sampler_accept(smp,tok,true);std::string piece=common_token_to_piece(v,tok,true);if(!piece.empty()&&!emit(e,cb,mid,piece)){stopped=true;break;}common_batch_clear(b);common_batch_add(b,tok,pos++,{0},true);if(llama_decode(g_ctx,b)!=0){stopped=true;break;}} if(g_stop)stopped=true; LOGE("generation terminal: stopped=%d eog=%d",stopped?1:0,eog?1:0);
-            llama_batch_free(b);common_sampler_free(smp);emit(e,cb,mid,"",true);return JNI_TRUE;
+            llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;
            }catch(const std::exception&x){LOGE("generation: %s",x.what());return JNI_FALSE;}catch(...){LOGE("generation unknown error");return JNI_FALSE;}
           }
 
