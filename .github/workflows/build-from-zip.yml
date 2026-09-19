@@ -620,14 +620,15 @@ jobs:
                   final StringBuilder answer = new StringBuilder();
                   new Thread(() -> {
                       boolean ok = NativeBridge.nativeGenerateChat(
-                              roles, contents, 1024, 0.7f, 0.95f, 40, 0.05f, -1L,
+                              roles, contents, maxTokens, temperature, topP, topK, minP, seed,
+                              useJinja, enableThinking, systemPrompt,
                               (piece, done) -> {
                                   if (piece != null && !piece.isEmpty()) answer.append(piece);
                                   runOnUiThread(() -> {
                                       ThinkingParser.Parts parts = ThinkingParser.split(answer.toString());
-                                      thinking.setText(parts.thinking.isEmpty() ? "" : "🧠  Thinking\n\n" + MarkdownRenderer.render(parts.thinking));
-                                      thinking.setVisibility(parts.thinking.isEmpty() ? View.GONE : View.VISIBLE);
-                                      chat.setText(header + "You\n" + MarkdownRenderer.render(prompt) + "\n\nAssistant\n" + MarkdownRenderer.render(parts.answer));
+                                      if(parts.thinking.isEmpty()) thinking.setVisibility(View.GONE);
+                                      else { SpannableStringBuilder tb=new SpannableStringBuilder("🧠  Thinking\n\n"); tb.append(MarkdownRenderer.render(parts.thinking)); thinking.setText(tb); thinking.setVisibility(View.VISIBLE); }
+                                      SpannableStringBuilder cb=new SpannableStringBuilder(); cb.append(header).append("You\n").append(MarkdownRenderer.render(prompt)).append("\n\nAssistant\n").append(MarkdownRenderer.render(parts.answer)); chat.setText(cb);
                                       if (shouldAutoScroll()) chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
                                   });
                                   if (done) runOnUiThread(() -> generating = false);
