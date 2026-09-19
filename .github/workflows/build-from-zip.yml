@@ -497,7 +497,7 @@ jobs:
               private void inspectPreviousExit() {
                   try {
                       ActivityManager am = (ActivityManager)getSystemService(ACTIVITY_SERVICE);
-                      java.util.List<ApplicationExitInfo> exits = am.getHistoricalProcessExitReasons(getPackageName(), 0);
+                      java.util.List<ApplicationExitInfo> exits = am.getHistoricalProcessExitReasons(getPackageName(), 0, 10);
                       if (exits == null || exits.isEmpty()) return;
                       ApplicationExitInfo info = exits.get(0);
                       int reason = info.getReason();
