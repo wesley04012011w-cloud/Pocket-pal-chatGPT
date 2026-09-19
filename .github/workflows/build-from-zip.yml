@@ -1,4 +1,4 @@
-name: Build Android from project ZIP
+name: Build Native Android APK
 
 on:
   workflow_dispatch:
@@ -16,115 +16,42 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find and validate project ZIP
+      - name: Find and extract project ZIP
         run: |
           set -e
           shopt -s nullglob
           zips=( "$GITHUB_WORKSPACE"/*.zip )
-          if [ "${#zips[@]}" -eq 0 ]; then
-            echo "::error::Nenhum .zip encontrado na raiz do repositório."
-            exit 1
-          fi
-          if [ "${#zips[@]}" -gt 1 ]; then
-            echo "::error::Mais de um .zip encontrado na raiz. Deixe apenas o ZIP do projeto."
-            printf 'Encontrados:\n'
-            printf ' - %s\n' "${zips[@]}"
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "::error::Deixe exatamente um ZIP na raiz do repositório."
+            printf '%s\n' "${zips[@]}"
             exit 1
           fi
           ZIP_PATH="${zips[0]}"
-          ZIP_NAME="$(basename "$ZIP_PATH")"
-          echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
-          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
-          echo "Usando: $ZIP_NAME"
-          unzip -t "$ZIP_PATH"
-
-      - name: Extract project
-        run: |
-          set -e
           rm -rf extracted
           mkdir extracted
           unzip -q "$ZIP_PATH" -d extracted
           PROJECT_DIR="$(find "$GITHUB_WORKSPACE/extracted" -name package.json -type f -print -quit | xargs -r dirname)"
           if [ -z "$PROJECT_DIR" ]; then
-            echo "::error::O ZIP não contém um package.json de projeto."
+            echo "::error::package.json não encontrado no ZIP."
             exit 1
           fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Projeto encontrado em: $PROJECT_DIR"
 
-      - name: Patch llama.cpp 0.4.x native compatibility
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("native/android/LlamaEngine.cpp")
-          s = p.read_text()
-          old = "    mp.use_mmap = mmap;\n    mp.use_mlock = mlock;"
-          new = "    mp.load_mode = mmap ? (mlock ? LLAMA_LOAD_MODE_MMAP_MLOCK : LLAMA_LOAD_MODE_MMAP)\n                         : (mlock ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE);"
-          if old in s:
-              s = s.replace(old, new)
-          # Use llama.cpp's common tokenizer helper. Handle both the older spacing
-          # and the newer signature shipped inside the project ZIP.
-          s = s.replace('#include "chat.h"', '#include "chat.h"\n#include "common.h"')
-          import re
-          pat = r'static bool decode_prompt\s*\([^)]*\)\s*\{.*?\n\}'
-          new_decode = '''static bool decode_prompt(const std::string & prompt, std::vector<llama_token> & tokens) {
-              const llama_vocab * vocab = llama_model_get_vocab(g_model);
-              if (!vocab || prompt.empty()) return false;
-              tokens = common_tokenize(vocab, prompt, true, true);
-              return !tokens.empty();
-          }'''
-          s, count = re.subn(pat, new_decode, s, count=1, flags=re.S)
-          if count != 1:
-              raise SystemExit("decode_prompt function not found in project ZIP")
-          s = s.replace('cp.n_batch = (uint32_t)batch;',
-                        'cp.n_batch = std::max<uint32_t>((uint32_t)batch, 2048u);')
-          s = s.replace('render_chat(msgs, true, true)', 'render_chat(msgs, true, false)')
-          p.write_text(s)
-          PY
-      - name: Patch Android native linker
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("native/android/CMakeLists.txt")
-          s = p.read_text()
-          old = "target_link_libraries(pocketpal_local PRIVATE llama llama-common)"
-          new = "target_link_libraries(pocketpal_local PRIVATE llama llama-common log)"
-          if old not in s:
-              raise SystemExit("Expected target_link_libraries line not found")
-          p.write_text(s.replace(old, new))
-          PY
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install dependencies
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: npm install
-
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "17"
 
       - name: Configure Android SDK
         run: |
           set -e
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::sdkmanager não encontrado em $ANDROID_HOME"
-            find "$ANDROID_HOME" -maxdepth 4 -type f -name sdkmanager -print || true
-            exit 1
-          fi
           echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
           echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
@@ -134,525 +61,591 @@ jobs:
       - name: Fetch llama.cpp
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          set -e
           TAG="$(tr -d '\r\n' < llama.cpp.version)"
+          # The native bridge was validated against llama.cpp 0.4.1.
+          if [ "$TAG" != "v0.4.1" ]; then TAG="v0.4.1"; fi
           git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp.git llama.cpp
 
-      - name: Prepare Capacitor Android
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: npm run android:prepare
-
-      - name: Force Java Capacitor native bridge and safe Android window layout
+      - name: Create native Android project
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
-          APP=android/app/src/main
-          PKG=dev/pocketpal/local
-          mkdir -p "$APP/java/$PKG"
 
-          # Capacitor's Android template is Java by default. The previous project
-          # wrote .kt files, which can be left out when Kotlin is not enabled.
-          # Keep the native bridge in Java so the plugin is definitely packaged.
-          rm -f "$APP/java/$PKG/MainActivity.kt" "$APP/java/$PKG/LocalLlamaPlugin.kt" "$APP/java/$PKG/NativeBridge.kt"
+          rm -rf android
+          mkdir -p android/app/src/main/java/dev/pocketpal/local
+          mkdir -p android/app/src/main/cpp
+          mkdir -p android/app/src/main/res/values
 
-          cat > "$APP/java/$PKG/NativeBridge.java" <<'JAVA'
+          cp native/android/LlamaEngine.cpp android/app/src/main/cpp/LlamaEngine.cpp
+
+          cat > android/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "PocketPalLocal"
+          include(":app")
+          EOF
+
+          cat > android/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.13.2' apply false
+          }
+          EOF
+
+          cat > android/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+          cat > android/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'dev.pocketpal.local'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'dev.pocketpal.local'
+                  minSdk 26
+                  targetSdk 35
+                  versionCode 1
+                  versionName '0.1.0'
+                  ndkVersion '27.2.12479018'
+
+                  externalNativeBuild {
+                      cmake {
+                          cppFlags '-std=c++17', '-O3'
+                      }
+                  }
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+              }
+
+              externalNativeBuild {
+                  cmake {
+                      path file('src/main/cpp/CMakeLists.txt')
+                      version '3.31.6'
+                  }
+              }
+
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging true
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > android/app/src/main/cpp/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.22)
+          project(pocketpal_local LANGUAGES C CXX)
+
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+          set(LLAMA_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../../llama.cpp")
+
+          set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_APP OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_UI OFF CACHE BOOL "" FORCE)
+          set(LLAMA_USE_PREBUILT_UI OFF CACHE BOOL "" FORCE)
+          set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
+          set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+          set(LLAMA_SUBPROCESS OFF CACHE BOOL "" FORCE)
+
+          add_subdirectory("${LLAMA_CPP_DIR}" "${CMAKE_BINARY_DIR}/llama.cpp")
+
+          add_library(pocketpal_local SHARED LlamaEngine.cpp)
+          target_include_directories(pocketpal_local PRIVATE
+              "${LLAMA_CPP_DIR}/include"
+              "${LLAMA_CPP_DIR}/common"
+              "${LLAMA_CPP_DIR}/ggml/include"
+          )
+          target_link_libraries(pocketpal_local PRIVATE llama llama-common log)
+          EOF
+
+          cat > android/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:hardwareAccelerated="true"
+                  android:label="PocketPal Local"
+                  android:theme="@style/AppTheme"
+                  android:supportsRtl="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:screenOrientation="portrait"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > android/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">false</item>
+                  <item name="android:statusBarColor">#09090B</item>
+                  <item name="android:navigationBarColor">#09090B</item>
+                  <item name="android:windowLightNavigationBar">false</item>
+                  <item name="android:colorAccent">#E8E8EA</item>
+                  <item name="android:windowActionModeOverlay">true</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > android/app/src/main/java/dev/pocketpal/local/NativeBridge.java <<'EOF'
           package dev.pocketpal.local;
-          
+
           public final class NativeBridge {
               static { System.loadLibrary("pocketpal_local"); }
               private NativeBridge() {}
-          
-              public static native boolean nativeLoad(String path, int nctx, int threads, int batchThreads, int batch,
-                                                      boolean flash, boolean mmap, boolean mlock);
+
+              public static native boolean nativeLoad(
+                      String path, int nctx, int threads, int batchThreads, int batch,
+                      boolean flash, boolean mmap, boolean mlock);
+
               public static native String nativeTemplate();
               public static native void nativeStop();
               public static native void nativeFree();
-              public static native boolean nativeGenerateChat(String[] roles, String[] contents, int maxTokens,
-                                                              float temperature, float topP, int topK, float minP,
-                                                              long seed, TokenCallback callback);
+
+              public static native boolean nativeGenerateChat(
+                      String[] roles, String[] contents, int maxTokens,
+                      float temperature, float topP, int topK, float minP, long seed,
+                      TokenCallback callback);
           }
-          
+
           interface TokenCallback {
               void emit(String text, boolean done);
           }
-          JAVA
+          EOF
 
-          cat > "$APP/java/$PKG/LocalLlamaPlugin.java" <<'JAVA'
+          cat > android/app/src/main/java/dev/pocketpal/local/MainActivity.java <<'EOF'
           package dev.pocketpal.local;
-          
+
           import android.app.Activity;
+          import android.app.AlertDialog;
           import android.content.Intent;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
           import android.net.Uri;
+          import android.os.Bundle;
           import android.provider.OpenableColumns;
-          
-          import androidx.annotation.NonNull;
-          
-          import androidx.activity.result.ActivityResult;
-          import com.getcapacitor.JSArray;
-          import com.getcapacitor.JSObject;
-          import com.getcapacitor.Plugin;
-          import com.getcapacitor.PluginCall;
-          import com.getcapacitor.PluginMethod;
-          import com.getcapacitor.annotation.ActivityCallback;
-          import com.getcapacitor.annotation.CapacitorPlugin;
-          
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.Window;
+          import android.view.WindowInsets;
+          import android.view.WindowInsetsController;
+          import android.view.inputmethod.InputMethodManager;
+          import android.content.Context;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.HorizontalScrollView;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
           import java.io.File;
-          
-          @CapacitorPlugin(name = "LlamaEngine")
-          public class LocalLlamaPlugin extends Plugin {
-              @PluginMethod
-              public void pickModel(PluginCall call) {
-                  Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                  intent.addCategory(Intent.CATEGORY_OPENABLE);
-                  intent.setType("application/octet-stream");
-                  startActivityForResult(call, intent, "modelPicker");
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.util.ArrayList;
+          import java.util.List;
+          import java.util.Locale;
+
+          public class MainActivity extends Activity {
+              private static final int PICK_MODEL = 7001;
+
+              private final int BG = Color.rgb(9, 9, 11);
+              private final int PANEL = Color.rgb(18, 18, 21);
+              private final int PANEL_2 = Color.rgb(25, 25, 29);
+              private final int TEXT = Color.rgb(241, 241, 243);
+              private final int MUTED = Color.rgb(151, 151, 160);
+              private final int LINE = Color.rgb(43, 43, 48);
+
+              private LinearLayout root;
+              private TextView modelStatus;
+              private TextView emptyTitle;
+              private TextView emptyText;
+              private Button modelButton;
+              private EditText input;
+              private TextView chat;
+              private boolean loaded = false;
+              private boolean generating = false;
+              private File modelFile;
+
+              private int dp(float v) {
+                  return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
               }
-          
-              @ActivityCallback
-              public void modelPicker(PluginCall call, ActivityResult result) {
-                  if (result.getResultCode() != Activity.RESULT_OK) {
-                      call.reject("Picker cancelled");
-                      return;
-                  }
-                  Uri uri = result.getData() != null ? result.getData().getData() : null;
-                  if (uri == null) {
-                      call.reject("No file selected");
-                      return;
-                  }
-                  try {
-                      String name = queryName(uri);
-                      if (name == null || name.isEmpty()) name = "model.gguf";
-                      String safe = name.replaceAll("[^A-Za-z0-9._-]", "_");
-                      File dst = new File(getContext().getFilesDir(), "models/" + safe);
-                      File parent = dst.getParentFile();
-                      if (parent != null) parent.mkdirs();
-                      try (java.io.InputStream input = getContext().getContentResolver().openInputStream(uri);
-                           java.io.OutputStream output = new java.io.FileOutputStream(dst)) {
-                          if (input == null) throw new IllegalStateException("Unable to open selected file");
-                          byte[] buffer = new byte[1024 * 1024];
-                          int n;
-                          while ((n = input.read(buffer)) >= 0) {
-                              if (n > 0) output.write(buffer, 0, n);
+
+              private TextView text(String value, float size, int color) {
+                  TextView t = new TextView(this);
+                  t.setText(value);
+                  t.setTextSize(size);
+                  t.setTextColor(color);
+                  t.setGravity(Gravity.CENTER_VERTICAL);
+                  return t;
+              }
+
+              private android.graphics.drawable.GradientDrawable bg(int color, float radius) {
+                  android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
+                  d.setColor(color);
+                  d.setCornerRadius(dp(radius));
+                  return d;
+              }
+
+              private Button button(String label) {
+                  Button b = new Button(this);
+                  b.setText(label);
+                  b.setTextSize(14);
+                  b.setTextColor(Color.rgb(15,15,17));
+                  b.setAllCaps(false);
+                  b.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+                  b.setBackground(bg(Color.rgb(232,232,236), 28));
+                  b.setPadding(dp(18), 0, dp(18), 0);
+                  return b;
+              }
+
+              private TextView iconButton(String symbol) {
+                  TextView b = text(symbol, 28, TEXT);
+                  b.setGravity(Gravity.CENTER);
+                  b.setBackground(bg(Color.TRANSPARENT, 18));
+                  b.setPadding(dp(8), 0, dp(8), 0);
+                  return b;
+              }
+
+              @Override protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  Window w = getWindow();
+                  w.setStatusBarColor(BG);
+                  w.setNavigationBarColor(BG);
+                  w.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+                  if (android.os.Build.VERSION.SDK_INT >= 29) w.setNavigationBarContrastEnforced(false);
+                  buildUi();
+              }
+
+              private void buildUi() {
+                  root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setBackgroundColor(BG);
+                  root.setPadding(0, 0, 0, 0);
+
+                  LinearLayout top = new LinearLayout(this);
+                  top.setGravity(Gravity.CENTER_VERTICAL);
+                  top.setPadding(dp(18), dp(8), dp(14), dp(8));
+
+                  TextView menu = iconButton("☰");
+                  top.addView(menu, new LinearLayout.LayoutParams(dp(48), dp(48)));
+                  TextView title = text("Chat", 25, TEXT);
+                  title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                  top.addView(title, new LinearLayout.LayoutParams(0, dp(56), 1));
+
+                  TextView edit = iconButton("✎");
+                  edit.setOnClickListener(v -> newChat());
+                  top.addView(edit, new LinearLayout.LayoutParams(dp(52), dp(52)));
+                  TextView more = iconButton("⋮");
+                  more.setOnClickListener(v -> showSettings());
+                  top.addView(more, new LinearLayout.LayoutParams(dp(44), dp(52)));
+                  root.addView(top, new LinearLayout.LayoutParams(-1, dp(70)));
+
+                  LinearLayout body = new LinearLayout(this);
+                  body.setOrientation(LinearLayout.VERTICAL);
+                  body.setGravity(Gravity.CENTER);
+                  body.setPadding(dp(22), 0, dp(22), 0);
+
+                  emptyTitle = text("Activate Model To Get Started", 24, TEXT);
+                  emptyTitle.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+                  emptyTitle.setGravity(Gravity.CENTER);
+                  body.addView(emptyTitle, new LinearLayout.LayoutParams(-1, dp(42)));
+
+                  emptyText = text("Select the model and load it. After loading, start chatting with your local model.", 17, MUTED);
+                  emptyText.setGravity(Gravity.CENTER);
+                  emptyText.setLineSpacing(0, 1.12f);
+                  LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, dp(100));
+                  ep.topMargin = dp(8);
+                  body.addView(emptyText, ep);
+
+                  modelButton = button("Select Model");
+                  modelButton.setOnClickListener(v -> pickModel());
+                  LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(280), dp(58));
+                  bp.gravity = Gravity.CENTER;
+                  bp.topMargin = dp(16);
+                  body.addView(modelButton, bp);
+
+                  chat = text("", 16, TEXT);
+                  chat.setGravity(Gravity.TOP | Gravity.START);
+                  chat.setTextIsSelectable(true);
+                  ScrollView chatScroll = new ScrollView(this);
+                  chatScroll.setFillViewport(true);
+                  chatScroll.addView(chat, new ScrollView.LayoutParams(-1, -2));
+                  chatScroll.setVisibility(View.GONE);
+                  body.addView(chatScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+                  root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
+
+                  LinearLayout composer = new LinearLayout(this);
+                  composer.setOrientation(LinearLayout.VERTICAL);
+                  composer.setPadding(dp(14), dp(12), dp(14), dp(16));
+                  composer.setBackground(bg(PANEL, 26));
+
+                  input = new EditText(this);
+                  input.setHint("Type a message...");
+                  input.setHintTextColor(Color.rgb(105,105,114));
+                  input.setTextColor(TEXT);
+                  input.setTextSize(17);
+                  input.setSingleLine(false);
+                  input.setMinLines(2);
+                  input.setMaxLines(5);
+                  input.setGravity(Gravity.TOP | Gravity.START);
+                  input.setBackgroundColor(Color.TRANSPARENT);
+                  composer.addView(input, new LinearLayout.LayoutParams(-1, dp(70)));
+
+                  LinearLayout actions = new LinearLayout(this);
+                  actions.setGravity(Gravity.CENTER_VERTICAL);
+
+                  TextView plus = text("+", 30, TEXT);
+                  plus.setGravity(Gravity.CENTER);
+                  actions.addView(plus, new LinearLayout.LayoutParams(dp(48), dp(42)));
+
+                  TextView up = text("⌃", 25, TEXT);
+                  up.setGravity(Gravity.CENTER);
+                  up.setBackground(bg(PANEL_2, 24));
+                  LinearLayout.LayoutParams upLp = new LinearLayout.LayoutParams(dp(48), dp(42));
+                  upLp.leftMargin = dp(4);
+                  actions.addView(up, upLp);
+
+                  modelStatus = text("Model not loaded", 12, MUTED);
+                  modelStatus.setGravity(Gravity.CENTER_VERTICAL);
+                  LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, dp(42), 1);
+                  sp.leftMargin = dp(10);
+                  actions.addView(modelStatus, sp);
+
+                  TextView send = text("➤", 30, TEXT);
+                  send.setGravity(Gravity.CENTER);
+                  send.setOnClickListener(v -> sendMessage());
+                  actions.addView(send, new LinearLayout.LayoutParams(dp(52), dp(42)));
+
+                  composer.addView(actions);
+                  root.addView(composer, new LinearLayout.LayoutParams(-1, dp(156)));
+
+                  setContentView(root);
+              }
+
+              private void pickModel() {
+                  Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                  i.addCategory(Intent.CATEGORY_OPENABLE);
+                  i.setType("*/*");
+                  startActivityForResult(i, PICK_MODEL);
+              }
+
+              @Override protected void onActivityResult(int request, int result, Intent data) {
+                  super.onActivityResult(request, result, data);
+                  if (request != PICK_MODEL || result != RESULT_OK || data == null || data.getData() == null) return;
+                  Uri uri = data.getData();
+                  new Thread(() -> {
+                      try {
+                          File dir = new File(getFilesDir(), "models");
+                          if (!dir.exists()) dir.mkdirs();
+                          String name = queryName(uri);
+                          if (name == null || name.isEmpty()) name = "model.gguf";
+                          name = name.replaceAll("[^A-Za-z0-9._-]", "_");
+                          modelFile = new File(dir, name);
+                          try (InputStream in = getContentResolver().openInputStream(uri);
+                               FileOutputStream out = new FileOutputStream(modelFile)) {
+                              if (in == null) throw new IllegalStateException("Não foi possível abrir o modelo");
+                              byte[] buf = new byte[1024 * 1024];
+                              int n;
+                              while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                           }
+                          runOnUiThread(() -> loadModel());
+                      } catch (Exception e) {
+                          runOnUiThread(() -> Toast.makeText(this, "Importação falhou: " + e.getMessage(), Toast.LENGTH_LONG).show());
                       }
-                      call.resolve(new JSObject()
-                              .put("path", dst.getAbsolutePath())
-                              .put("name", safe)
-                              .put("size", dst.length()));
-                  } catch (Exception e) {
-                      call.reject("Failed to import model", e);
-                  }
+                  }).start();
               }
-          
+
               private String queryName(Uri uri) {
-                  try (android.database.Cursor c = getContext().getContentResolver().query(uri, null, null, null, null)) {
+                  try (android.database.Cursor c = getContentResolver().query(uri, null, null, null, null)) {
                       if (c != null) {
                           int idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
                           if (idx >= 0 && c.moveToFirst()) return c.getString(idx);
                       }
-                  }
+                  } catch (Exception ignored) {}
                   return uri.getLastPathSegment();
               }
-          
-              @PluginMethod
-              public void loadModel(PluginCall call) {
-                  String path = call.getString("path");
-                  JSObject settings = call.getObject("settings");
-                  if (path == null) { call.reject("Missing path"); return; }
-                  if (settings == null) { call.reject("Missing settings"); return; }
-                  boolean ok = NativeBridge.nativeLoad(
-                          path,
-                          settings.optInt("context", 8192),
-                          settings.optInt("threads", Math.min(Runtime.getRuntime().availableProcessors(), 8)),
-                          settings.optInt("batchThreads", Math.min(Runtime.getRuntime().availableProcessors(), 8)),
-                          settings.optInt("batch", 512),
-                          settings.optBoolean("flashAttention", true),
-                          settings.optBoolean("mmap", true),
-                          settings.optBoolean("mlock", false));
-                  String template = ok ? NativeBridge.nativeTemplate() : "";
-                  call.resolve(new JSObject()
-                          .put("ok", ok)
-                          .put("template", template)
-                          .put("description", "llama.cpp native engine"));
-              }
-          
-              @PluginMethod
-              public void generate(PluginCall call) {
-                  JSArray messages = call.getArray("messages");
-                  JSObject settings = call.getObject("settings");
-                  if (messages == null) { call.reject("Missing messages"); return; }
-                  if (settings == null) { call.reject("Missing settings"); return; }
-                  try {
-                      final String[] roles = new String[messages.length()];
-                      final String[] contents = new String[messages.length()];
-                      for (int i = 0; i < messages.length(); i++) {
-                          JSObject m = JSObject.fromJSONObject(messages.getJSONObject(i));
-                          roles[i] = m.getString("role");
-                          contents[i] = m.getString("content");
-                      }
-                      Thread t = new Thread(() -> {
-                          boolean ok = NativeBridge.nativeGenerateChat(
-                                  roles,
-                                  contents,
-                                  settings.optInt("maxTokens", 1024),
-                                  (float) settings.optDouble("temperature", 0.7),
-                                  (float) settings.optDouble("topP", 0.95),
-                                  settings.optInt("topK", 40),
-                                  (float) settings.optDouble("minP", 0.05),
-                                  settings.optLong("seed", -1L),
-                                  (text, done) -> notifyListeners("token", new JSObject().put("text", text).put("done", done)));
-                          if (!ok) {
-                              notifyListeners("token", new JSObject().put("text", "\\n\\n[Native inference error]").put("done", true));
+
+              private void loadModel() {
+                  if (modelFile == null) return;
+                  modelButton.setText("Loading model…");
+                  modelButton.setEnabled(false);
+                  modelStatus.setText("Loading " + modelFile.getName() + "…");
+                  new Thread(() -> {
+                      boolean ok = NativeBridge.nativeLoad(
+                              modelFile.getAbsolutePath(), 8192, 6, 6, 512,
+                              true, true, false);
+                      runOnUiThread(() -> {
+                          loaded = ok;
+                          modelButton.setEnabled(true);
+                          modelButton.setText(ok ? "Model Loaded" : "Select Model");
+                          modelStatus.setText(ok ? modelFile.getName() : "Model load failed");
+                          if (ok) {
+                              emptyTitle.setText("Ready");
+                              emptyText.setText("Your model is loaded locally. Type a message below.");
+                          } else {
+                              Toast.makeText(this, "Falha ao carregar o modelo.", Toast.LENGTH_LONG).show();
                           }
-                          call.resolve(new JSObject().put("ok", ok));
-                      }, "llama-generate");
-                      t.start();
-                  } catch (Exception e) {
-                      call.reject("Invalid generation request", e);
+                      });
+                  }, "model-loader").start();
+              }
+
+              private void sendMessage() {
+                  if (!loaded || generating) {
+                      if (!loaded) Toast.makeText(this, "Carregue um modelo primeiro.", Toast.LENGTH_SHORT).show();
+                      return;
                   }
+                  String prompt = input.getText().toString().trim();
+                  if (prompt.isEmpty()) return;
+                  input.setText("");
+                  generating = true;
+                  String previous = chat.getText().toString();
+                  String header = previous.isEmpty() ? "" : previous + "\n\n";
+                  chat.setText(header + "You\n" + prompt + "\n\nAssistant\n");
+                  String[] roles = new String[]{"user"};
+                  String[] contents = new String[]{prompt};
+                  final StringBuilder answer = new StringBuilder();
+                  new Thread(() -> {
+                      boolean ok = NativeBridge.nativeGenerateChat(
+                              roles, contents, 1024, 0.7f, 0.95f, 40, 0.05f, -1L,
+                              (text, done) -> {
+                                  if (text != null && !text.isEmpty()) answer.append(text);
+                                  runOnUiThread(() -> chat.setText(header + "You\n" + prompt + "\n\nAssistant\n" + answer));
+                                  if (done) runOnUiThread(() -> generating = false);
+                              });
+                      if (!ok) runOnUiThread(() -> {
+                          generating = false;
+                          chat.append("\n[Native inference error]");
+                      });
+                  }, "llama-generate").start();
               }
-          
-              @PluginMethod
-              public void stop(PluginCall call) {
-                  NativeBridge.nativeStop();
-                  call.resolve(new JSObject().put("ok", true));
+
+              private void newChat() {
+                  chat.setText("");
+                  input.setText("");
+                  emptyTitle.setText(loaded ? "Ready" : "Activate Model To Get Started");
+                  emptyText.setText(loaded ? "Your model is loaded locally. Type a message below." : "Select the model and load it. After loading, start chatting with your local model.");
               }
-          
-              @PluginMethod
-              public void unload(PluginCall call) {
+
+              private void showSettings() {
+                  LinearLayout box = new LinearLayout(this);
+                  box.setOrientation(LinearLayout.VERTICAL);
+                  box.setPadding(dp(20), dp(8), dp(20), dp(8));
+
+                  EditText ctx = new EditText(this);
+                  ctx.setHint("Context (default 8192)");
+                  ctx.setInputType(2);
+                  box.addView(ctx);
+                  EditText threads = new EditText(this);
+                  threads.setHint("CPU threads (default 6)");
+                  threads.setInputType(2);
+                  box.addView(threads);
+                  EditText tokens = new EditText(this);
+                  tokens.setHint("Max output tokens (default 1024)");
+                  tokens.setInputType(2);
+                  box.addView(tokens);
+
+                  new AlertDialog.Builder(this)
+                          .setTitle("Local model settings")
+                          .setView(box)
+                          .setPositiveButton("Apply", (d, which) -> Toast.makeText(this, "Settings UI pronta; controles avançados entram na próxima etapa.", Toast.LENGTH_SHORT).show())
+                          .setNegativeButton("Cancel", null)
+                          .show();
+              }
+
+              @Override protected void onDestroy() {
+                  super.onDestroy();
+                  if (generating) NativeBridge.nativeStop();
                   NativeBridge.nativeFree();
-                  call.resolve(new JSObject().put("ok", true));
-              }
-          
-              @PluginMethod
-              public void getCapabilities(PluginCall call) {
-                  call.resolve(new JSObject()
-                          .put("mmap", true)
-                          .put("mlock", true)
-                          .put("gpu", false)
-                          .put("jinja", true));
               }
           }
-          JAVA
+          EOF
 
-          cat > "$APP/java/$PKG/MainActivity.java" <<'JAVA'
-          package dev.pocketpal.local;
-
-          import android.os.Bundle;
-          import android.view.WindowManager;
-
-          import androidx.core.view.WindowCompat;
-
-          import com.getcapacitor.BridgeActivity;
-
-          public class MainActivity extends BridgeActivity {
-              @Override
-              public void onCreate(Bundle savedInstanceState) {
-                  registerPlugin(LocalLlamaPlugin.class);
-                  super.onCreate(savedInstanceState);
-
-                  // Keep the WebView in the normal Android window layout. The previous
-                  // edge-to-edge/insets controller could make a healthy React surface
-                  // appear as a completely black viewport on some WebViews.
-                  WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
-                  getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-                  if (android.os.Build.VERSION.SDK_INT >= 29) {
-                      getWindow().setNavigationBarContrastEnforced(false);
-                  }
-
-                  if (bridge != null && bridge.getWebView() != null) {
-                      bridge.getWebView().setFocusableInTouchMode(true);
-                      bridge.getWebView().setBackgroundColor(android.graphics.Color.rgb(9, 9, 11));
-                      bridge.getWebView().setAlpha(1.0f);
-                  }
-              }
-          }
-          JAVA
-
-          # Make the web UI resilient too, especially on devices where WebView reports safe-area insets.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("src/styles.css")
-          s = p.read_text()
-          s = s.replace("body{margin:0;min-width:320px;background:#09090b}", "body{margin:0;min-width:320px;background:#09090b;overflow:hidden}")
-          s = s.replace(".app-shell{height:100dvh;", ".app-shell{height:100dvh;min-height:100dvh;")
-          s = s.replace("padding:18px clamp(14px,7vw,100px) 24px", "padding:18px clamp(14px,7vw,100px) calc(24px + env(safe-area-inset-bottom, 0px))")
-          p.write_text(s)
-          PY
-
-          # Android 15+/IME: ensure the generated activity receives keyboard insets.
+          # Patch the C++ bridge for llama.cpp 0.4.1.
           python3 - <<'PY'
           from pathlib import Path
           import re
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          if p.exists():
-              s = p.read_text()
-              pat = r'(<activity[^>]*android:name="[^"]*MainActivity"[^>]*)(>)'
-              def add_resize(m):
-                  if 'windowSoftInputMode=' in m.group(1):
-                      return m.group(0)
-                  return m.group(1) + ' android:windowSoftInputMode="adjustResize"' + m.group(2)
-              s = re.sub(pat, add_resize, s, count=1)
-              p.write_text(s)
-          PY
-
-          # Add a visible bootstrap/error surface so a React/Vite failure cannot look
-          # like an unexplained black screen. It disappears automatically once #root
-          # receives real UI content.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("index.html")
+          p = Path("android/app/src/main/cpp/LlamaEngine.cpp")
           s = p.read_text()
-          boot = r'''
-          <style id="pocketpal-boot-style">
-            #pocketpal-boot { position:fixed; inset:0; z-index:2147483647; display:flex;
-              align-items:center; justify-content:center; padding:24px; box-sizing:border-box;
-              background:#09090b; color:#f4f4f5; font:16px system-ui,sans-serif; }
-            #pocketpal-boot .box { max-width:520px; width:100%; border:1px solid #27272a;
-              border-radius:18px; padding:22px; background:#111113; box-sizing:border-box; }
-            #pocketpal-boot .title { font-size:22px; font-weight:700; margin-bottom:8px; }
-            #pocketpal-boot .sub { color:#a1a1aa; line-height:1.5; white-space:pre-wrap; }
-            #pocketpal-boot .err { margin-top:14px; color:#fca5a5; font-size:13px;
-              white-space:pre-wrap; overflow-wrap:anywhere; max-height:35vh; overflow:auto; }
-          </style>
-          <div id="pocketpal-boot"><div class="box">
-            <div class="title">PocketPal Local</div>
-            <div class="sub">Carregando a interface…</div>
-            <div class="err" id="pocketpal-boot-error"></div>
-          </div></div>
-          <script>
-          (() => {
-            const overlay = document.getElementById('pocketpal-boot');
-            const err = document.getElementById('pocketpal-boot-error');
-            const showError = e => {
-              if (err) err.textContent = String(e && (e.stack || e.message) || e);
-            };
-            window.addEventListener('error', e => showError(e.error || e.message));
-            window.addEventListener('unhandledrejection', e => showError(e.reason));
-            let started = Date.now();
-            const check = () => {
-              const root = document.getElementById('root');
-              const app = root && root.querySelector('.app-shell');
-              if (app) {
-                overlay.remove();
-                document.getElementById('pocketpal-boot-style')?.remove();
-                return;
-              }
-              if (Date.now() - started > 6000) {
-                if (err && !err.textContent) {
-                  err.textContent = 'A interface React não criou .app-shell após 6 segundos.\n' +
-                    'Isso indica falha de inicialização do bundle/WebView.';
-                }
-                return;
-              }
-              setTimeout(check, 250);
-            };
-            check();
-          })();
-          </script>
-          '''
-          if 'id="pocketpal-boot"' not in s and '<body' in s:
-              s = s.replace('<body>', '<body>' + boot)
-              p.write_text(s)
+          s = s.replace('#include "chat.h"', '#include "chat.h"\n#include "common.h"')
+          s = s.replace('mp.use_mmap = mmap;\n    mp.use_mlock = mlock;',
+                        'mp.load_mode = mmap ? (mlock ? LLAMA_LOAD_MODE_MMAP_MLOCK : LLAMA_LOAD_MODE_MMAP)\n                         : (mlock ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE);')
+          pat = r'static bool decode_prompt\s*\([^)]*\)\s*\{.*?\n\}'
+          repl = '''static bool decode_prompt(const std::string & prompt, std::vector<llama_token> & tokens) {
+              const llama_vocab * vocab = llama_model_get_vocab(g_model);
+              if (!vocab || prompt.empty()) return false;
+              tokens = common_tokenize(vocab, prompt, true, true);
+              return !tokens.empty();
+          }'''
+          s, n = re.subn(pat, repl, s, count=1, flags=re.S)
+          if n != 1: raise SystemExit("decode_prompt not found")
+          s = s.replace('cp.n_batch = (uint32_t)batch;', 'cp.n_batch = std::max<uint32_t>((uint32_t)batch, 2048u);')
+          s = s.replace('render_chat(msgs, true, true)', 'render_chat(msgs, true, false)')
+          s = s.replace('llama_sampler_init_dist((uint32_t)seed)', 'llama_sampler_init_dist(seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t)seed)')
+          p.write_text(s)
           PY
 
-          # Make React render failures visible instead of allowing a partial root
-          # mount to make the boot overlay disappear into a black screen.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("src/main.tsx")
-          p.write_text(r'''import React from "react";
-          import ReactDOM from "react-dom/client";
-          import App from "./App";
-          import "./styles.css";
+          cat > android/README.md <<'EOF'
+          # PocketPal Local — Native Android
+          
+          Native Android UI + C++ llama.cpp engine. No Capacitor, no WebView, no React runtime.
+          
+          The interface is an original dark chat layout inspired by the provided visual reference, without the reference app's mascot/icon.
+          EOF
 
-          class AppErrorBoundary extends React.Component<
-            { children: React.ReactNode },
-            { error: Error | null }
-          > {
-            state = { error: null as Error | null };
-            static getDerivedStateFromError(error: Error) {
-              return { error };
-            }
-            componentDidCatch(error: Error) {
-              console.error("PocketPal UI crashed:", error);
-              const el = document.getElementById("pocketpal-boot-error");
-              if (el) el.textContent = error.stack || error.message || String(error);
-            }
-            render() {
-              if (this.state.error) {
-                const e = this.state.error;
-                return <div style={{
-                  minHeight:"100vh", boxSizing:"border-box", padding:"32px 22px",
-                  background:"#09090b", color:"#f4f4f5", fontFamily:"system-ui,sans-serif"
-                }}>
-                  <h1 style={{fontSize:"24px",margin:"0 0 10px"}}>PocketPal Local</h1>
-                  <p style={{color:"#a1a1aa"}}>A interface encontrou um erro ao iniciar.</p>
-                  <pre style={{
-                    whiteSpace:"pre-wrap", overflowWrap:"anywhere", color:"#fca5a5",
-                    fontSize:"12px", lineHeight:"1.45", padding:"14px",
-                    border:"1px solid #3f1d1d", borderRadius:"12px", background:"#151012"
-                  }}>{e.stack || e.message}</pre>
-                </div>;
-              }
-              return this.props.children;
-            }
-          }
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
 
-          const root = document.getElementById("root");
-          if (!root) throw new Error("PocketPal: #root não encontrado");
-          ReactDOM.createRoot(root).render(
-            <React.StrictMode>
-              <AppErrorBoundary><App /></AppErrorBoundary>
-            </React.StrictMode>
-          );
-          ''')
-          PY
-
-          # TESTE 1: isola React/WebView do App completo.
-          # Se este APK mostrar "React render OK", o WebView está saudável e o
-          # problema está no App/CSS/imports. Se continuar preto, o problema é
-          # anterior ao App (WebView/Android/Capacitor).
-          python3 - <<'PY'
-          from pathlib import Path
-          Path("src/main.tsx").write_text(r'''import React from "react";
-          import ReactDOM from "react-dom/client";
-          import "./styles.css";
-
-          const root = document.getElementById("root");
-          if (!root) throw new Error("PocketPal: #root não encontrado");
-
-          ReactDOM.createRoot(root).render(
-            <div className="app-shell" style={{
-              position:"relative", width:"100%", height:"100vh", minHeight:"100vh",
-              display:"flex", alignItems:"center", justifyContent:"center",
-              background:"#111113", color:"#ffffff", fontFamily:"system-ui,sans-serif"
-            }}>
-              <div style={{
-                width:"min(520px, calc(100% - 32px))", padding:"28px",
-                border:"1px solid #3f3f46", borderRadius:"18px",
-                background:"#18181b", boxSizing:"border-box", textAlign:"center"
-              }}>
-                <div style={{fontSize:"28px",fontWeight:700}}>PocketPal Local</div>
-                <div style={{fontSize:"18px",marginTop:"12px"}}>React render OK</div>
-                <div style={{fontSize:"13px",color:"#a1a1aa",marginTop:"10px"}}>
-                  TESTE 1 — WebView + React funcionando.
-                </div>
-              </div>
-            </div>
-          );
-          ''')
-          PY
-
-          # Force basic dimensions/visibility so Android WebView CSS quirks cannot
-          # collapse the application into a black viewport.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("src/styles.css")
-          s = p.read_text()
-          base = """
-          html,body,#root{width:100%;height:100%;min-height:100%;margin:0}
-          body{overflow:hidden;background:#09090b}
-          #root{display:block;position:relative;isolation:isolate}
-          .app-shell{position:relative;width:100%;height:100%;min-height:100%;overflow:hidden}
-          """
-          if "isolation:isolate" not in s:
-              s = base + "\n" + s
-          s = s.replace("@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');", "")
-          # Harden the actual app surface against WebView compositing/layout quirks.
-          # No fullscreen, no edge-to-edge, no backdrop blur.
-          p.write_text(s + """
-          html,body,#root{width:100% !important;height:100% !important;min-height:100% !important;background:#09090b !important}
-          body{overflow:hidden !important}
-          #root{display:block !important;position:relative !important}
-          .app-shell{position:relative !important;inset:auto !important;width:100% !important;height:100vh !important;min-height:100vh !important;display:flex !important;visibility:visible !important;opacity:1 !important;background:#09090b !important;z-index:1 !important}
-          .topbar{backdrop-filter:none !important;-webkit-backdrop-filter:none !important;background:#111113 !important}
-          """)
-          PY
-
-          # Defensive WebView fix for the current broken Jinja/template overlay.
-          # It clears a template accidentally placed into the message editor and
-          # hides only the bottom template-preview panel, leaving the real input active.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("index.html")
-          if p.exists():
-              s = p.read_text()
-              script = r'''
-          <script>
-          (() => {
-            const templateLike = v => typeof v === 'string' &&
-              v.length > 80 && (v.includes('{%-') || v.includes('{%')) &&
-              (v.includes('message.content') || v.includes('add_generation_prompt'));
-            const fix = () => {
-              document.querySelectorAll('textarea,input,[contenteditable="true"]').forEach(el => {
-                const value = 'value' in el ? el.value : el.textContent;
-                if (templateLike(value)) {
-                  if ('value' in el) {
-                    el.value = '';
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                  } else {
-                    el.textContent = '';
-                  }
-                }
-                el.style.pointerEvents = 'auto';
-                el.style.touchAction = 'manipulation';
-                el.style.zIndex = '1000';
-              });
-              document.querySelectorAll('*').forEach(el => {
-                if (el.children.length > 8) return;
-                const t = (el.textContent || '').trim();
-                if (templateLike(t) && /jinja/i.test(t)) {
-                  const r = el.getBoundingClientRect();
-                  if (r.bottom > innerHeight * 0.55) el.style.display = 'none';
-                }
-              });
-            };
-            const boot = () => {
-              fix();
-              new MutationObserver(fix).observe(document.documentElement, {
-                childList: true, subtree: true, characterData: true
-              });
-              if (window.visualViewport) {
-                window.visualViewport.addEventListener('resize', () => {
-                  fix();
-                  const active = document.activeElement;
-                  if (active && /^(TEXTAREA|INPUT)$/.test(active.tagName)) {
-                    setTimeout(() => active.scrollIntoView({block:'nearest'}), 50);
-                  }
-                });
-              }
-            };
-            if (document.readyState === 'loading') {
-              document.addEventListener('DOMContentLoaded', boot, {once:true});
-            } else boot();
-          })();
-          </script>
-          '''
-              if '</body>' in s and 'Defensive WebView fix for the current broken Jinja/template overlay' not in s:
-                  s = s.replace('</body>', script + '\n</body>')
-                  p.write_text(s)
-          PY
-
-          # Fail early if the bridge/plugin is not actually present in the Android source set.
-          test -f "$APP/java/$PKG/MainActivity.java"
-          test -f "$APP/java/$PKG/LocalLlamaPlugin.java"
-          test -f "$APP/java/$PKG/NativeBridge.java"
-          grep -q '@CapacitorPlugin(name = "LlamaEngine")' "$APP/java/$PKG/LocalLlamaPlugin.java"
-
-      - name: Build web and sync Android
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          npm run build
-          npx cap sync android
-
-      - name: Build APK
+      - name: Build native APK
         working-directory: ${{ env.PROJECT_DIR }}/android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pocketpal-local-llm-debug-apk
+          name: pocketpal-local-native-debug-apk
           path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
