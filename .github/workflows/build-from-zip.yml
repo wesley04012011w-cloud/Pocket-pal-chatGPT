@@ -845,13 +845,14 @@ jobs:
             for(int step=0;step<std::max(1,(int)maxTok);step++){
               if(g_stop){reason=EndReason::STOP;break;}
               llama_token tok=common_sampler_sample(smp,g_ctx,-1);
-              if(llama_vocab_is_eog(v,tok)){reason=EndReason::EOG;break;}
+              const bool isEog=llama_vocab_is_eog(v,tok);
               common_sampler_accept(smp,tok,true);
               std::string piece=common_token_to_piece(v,tok,true);
-              if(!piece.empty()&&!emit(e,cb,mid,piece)){reason=EndReason::CALLBACK;break;}
+              if(!isEog&&!piece.empty()&&!emit(e,cb,mid,piece)){reason=EndReason::CALLBACK;break;}
               common_batch_clear(b);
               common_batch_add(b,tok,pos++,{0},true);
               if(llama_decode(g_ctx,b)!=0){reason=EndReason::DECODE_ERROR;break;}
+              if(isEog){reason=EndReason::EOG;break;}
             }
             LOGE("generation terminal: reason=%s",
                  reason==EndReason::EOG?"EOG":
