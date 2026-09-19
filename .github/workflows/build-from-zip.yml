@@ -292,6 +292,7 @@ jobs:
               private final int MUTED = Color.rgb(151, 151, 160);
 
               private LinearLayout root;
+              private ScrollView chatScroll;
               private TextView modelStatus, emptyTitle, emptyText, chat;
               private Button modelButton;
               private EditText input;
@@ -342,8 +343,15 @@ jobs:
                   w.setStatusBarColor(BG);
                   w.setNavigationBarColor(BG);
                   w.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-                  if (android.os.Build.VERSION.SDK_INT >= 29) w.setNavigationBarContrastEnforced(false);
+                  if (android.os.Build.VERSION.SDK_INT >= 29) {
+                      w.setNavigationBarContrastEnforced(false);
+                      w.setStatusBarContrastEnforced(false);
+                  }
+                  if (android.os.Build.VERSION.SDK_INT >= 30) {
+                      w.setDecorFitsSystemWindows(false);
+                  }
                   buildUi();
+                  root.post(() -> applySystemBarInsets());
               }
 
               private void buildUi() {
@@ -395,7 +403,7 @@ jobs:
                   chat = text("", 16, TEXT);
                   chat.setGravity(Gravity.TOP | Gravity.START);
                   chat.setTextIsSelectable(true);
-                  ScrollView chatScroll = new ScrollView(this);
+                  chatScroll = new ScrollView(this);
                   chatScroll.setFillViewport(true);
                   chatScroll.addView(chat, new ScrollView.LayoutParams(-1, -2));
                   chatScroll.setVisibility(View.GONE);
@@ -447,6 +455,18 @@ jobs:
                   root.addView(composer, new LinearLayout.LayoutParams(-1, dp(156)));
 
                   setContentView(root);
+                  applySystemBarInsets();
+              }
+
+              private void applySystemBarInsets() {
+                  if (root == null) return;
+                  root.setOnApplyWindowInsetsListener((v, insets) -> {
+                      android.view.WindowInsets.Type t = android.view.WindowInsets.Type.systemBars();
+                      android.graphics.Insets bars = insets.getInsets(t);
+                      v.setPadding(v.getPaddingLeft(), bars.top, v.getPaddingRight(), bars.bottom);
+                      return insets;
+                  });
+                  root.requestApplyInsets();
               }
 
               private void pickModel() {
@@ -521,6 +541,10 @@ jobs:
                   if (prompt.isEmpty()) return;
                   input.setText("");
                   generating = true;
+                  chatScroll.setVisibility(View.VISIBLE);
+                  emptyTitle.setVisibility(View.GONE);
+                  emptyText.setVisibility(View.GONE);
+                  modelButton.setVisibility(View.GONE);
                   String previous = chat.getText().toString();
                   String header = previous.isEmpty() ? "" : previous + "\n\n";
                   chat.setText(header + "You\n" + prompt + "\n\nAssistant\n");
@@ -537,6 +561,10 @@ jobs:
                               });
                       if (!ok) runOnUiThread(() -> {
                           generating = false;
+                          chatScroll.setVisibility(View.VISIBLE);
+                          emptyTitle.setVisibility(View.GONE);
+                          emptyText.setVisibility(View.GONE);
+                          modelButton.setVisibility(View.GONE);
                           chat.append("\n[Native inference error]");
                       });
                   }, "llama-generate").start();
@@ -545,6 +573,10 @@ jobs:
               private void newChat() {
                   chat.setText("");
                   input.setText("");
+                  chatScroll.setVisibility(View.GONE);
+                  emptyTitle.setVisibility(View.VISIBLE);
+                  emptyText.setVisibility(View.VISIBLE);
+                  modelButton.setVisibility(View.VISIBLE);
                   emptyTitle.setText(loaded ? "Ready" : "Activate Model To Get Started");
                   emptyText.setText(loaded ? "Your model is loaded locally. Type a message below." : "Select the model and load it. After loading, start chatting with your local model.");
               }
