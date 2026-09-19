@@ -246,38 +246,56 @@ jobs:
 
           cat > android/app/src/main/java/dev/pocketpal/local/MarkdownRenderer.java <<'EOF'
           package dev.pocketpal.local;
-          import android.text.Html;
+
+          import android.graphics.Typeface;
+          import android.text.SpannableStringBuilder;
           import android.text.Spanned;
+          import android.text.style.BackgroundColorSpan;
+          import android.text.style.ForegroundColorSpan;
+          import android.text.style.LeadingMarginSpan;
+          import android.text.style.RelativeSizeSpan;
+          import android.text.style.StyleSpan;
+          import android.text.style.TypefaceSpan;
+
           public final class MarkdownRenderer {
             private MarkdownRenderer(){}
             public static Spanned render(String src){
               if(src==null)src="";
-              String[] lines=src.replace("\r","").split("\n",-1);
-              StringBuilder h=new StringBuilder(); boolean code=false;
+              SpannableStringBuilder out=new SpannableStringBuilder();
+              String[] lines=src.replace("\r","").split("\n",-1); boolean code=false; StringBuilder cb=new StringBuilder();
               for(int i=0;i<lines.length;i++){
-                String l=lines[i];
-                if(l.trim().startsWith("\u0060\u0060\u0060")){code=!code;h.append(code?"<pre>":"</pre>");continue;}
-                if(code){h.append(esc(l)).append("\n");continue;}
-                if(l.matches("^\\s*#{1,6}\\s+.*")){h.append("<b>").append(inline(l.replaceFirst("^\\s*#{1,6}\\s+",""))).append("</b><br>");}
-                else if(l.matches("^\\s*>\\s?.*")){h.append("│ ").append(inline(l.replaceFirst("^\\s*>\\s?",""))).append("<br>");}
-                else if(l.matches("^\\s*[-*+]\\s+.*")){h.append("• ").append(inline(l.replaceFirst("^\\s*[-*+]\\s+",""))).append("<br>");}
-                else if(l.matches("^\\s*\\d+[.)]\\s+.*")){h.append(inline(l.replaceFirst("^\\s*(\\d+)[.)]\\s+","$1. "))).append("<br>");}
-                else {h.append(inline(l));if(i+1<lines.length)h.append("<br>");}
+                String line=lines[i];
+                if(line.trim().startsWith("\u0060\u0060\u0060")){
+                  if(code){appendCode(out,cb.toString());cb.setLength(0);code=false;}else code=true;
+                  continue;
+                }
+                if(code){cb.append(line);if(i<lines.length-1)cb.append("\n");continue;}
+                appendLine(out,line); if(i<lines.length-1)out.append("\n");
               }
-              return Html.fromHtml(h.toString(),Html.FROM_HTML_MODE_LEGACY);
+              if(code)appendCode(out,cb.toString()); return out;
             }
-            private static String esc(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
-            private static String inline(String s){
-              s=esc(s);
-              s=s.replaceAll("\\*\\*(.+?)\\*\\*","<b>$1</b>");
-              s=s.replaceAll("__(.+?)__","<b>$1</b>");
-              s=s.replaceAll("\u0060([^\u0060]+)\u0060","<font face='monospace'>$1</font>");
-              s=s.replaceAll("(?<!\\*)\\*([^*]+)\\*(?!\\*)","<i>$1</i>");
-              s=s.replaceAll("(?<!_)_([^_]+)_(?!_)","<i>$1</i>");
-              return s;
+            private static void appendLine(SpannableStringBuilder o,String l){
+              String t=l.trim(); int st=o.length();
+              if(t.matches("^#{1,6}\\s+.*")){appendInline(o,t.replaceFirst("^#{1,6}\\s+",""));o.setSpan(new StyleSpan(Typeface.BOLD),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new RelativeSizeSpan(1.18f),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return;}
+              if(t.matches("^>\\s?.*")){appendInline(o,t.replaceFirst("^>\\s?",""));o.setSpan(new LeadingMarginSpan.Standard(18,8),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new ForegroundColorSpan(0xff9b9ba4),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return;}
+              if(t.matches("^[-*+]\\s+.*")){appendInline(o,"• "+t.replaceFirst("^[-*+]\\s+",""));o.setSpan(new LeadingMarginSpan.Standard(18,0),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return;}
+              if(t.matches("^\\d+[.)]\\s+.*")){appendInline(o,t.replaceFirst("^(\\d+)[.)]\\s+","$1. "));o.setSpan(new LeadingMarginSpan.Standard(22,0),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return;}
+              appendInline(o,l);
+            }
+            private static void appendCode(SpannableStringBuilder o,String code){
+              if(o.length()>0&&o.charAt(o.length()-1)=='\n')o.delete(o.length()-1,o.length()); int st=o.length();
+              o.append(code.length()==0?" ":code); int en=o.length();
+              o.setSpan(new BackgroundColorSpan(0xff1c1c21),st,en,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new ForegroundColorSpan(0xffeeeeF0),st,en,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new TypefaceSpan(Typeface.MONOSPACE),st,en,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new LeadingMarginSpan.Standard(20,20),st,en,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.append("\n");
+            }
+            private static void appendInline(SpannableStringBuilder o,String s){
+              for(int i=0;i<s.length();){
+                if(i+1<s.length()&&s.charAt(i)=='*'&&s.charAt(i+1)=='*'){int e=s.indexOf("**",i+2);if(e>i+2){int st=o.length();o.append(s.substring(i+2,e));o.setSpan(new StyleSpan(Typeface.BOLD),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);i=e+2;continue;}}
+                if(s.charAt(i)=='`'){int e=s.indexOf('`',i+1);if(e>i+1){int st=o.length();o.append(s.substring(i+1,e));o.setSpan(new TypefaceSpan(Typeface.MONOSPACE),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new BackgroundColorSpan(0xff1c1c21),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);i=e+1;continue;}}
+                if(s.charAt(i)=='*'||s.charAt(i)=='_'){char m=s.charAt(i);int e=s.indexOf(m,i+1);if(e>i+1){int st=o.length();o.append(s.substring(i+1,e));o.setSpan(new StyleSpan(Typeface.ITALIC),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);i=e+1;continue;}}
+                o.append(s.charAt(i++));
+              }
             }
           }
-
           EOF
 
           cat > android/app/src/main/java/dev/pocketpal/local/ThinkingParser.java <<'EOF'
