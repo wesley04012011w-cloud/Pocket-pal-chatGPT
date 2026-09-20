@@ -1,4 +1,4 @@
-import { registerPlugin } from 'https://cdn.jsdelivr.net/npm/@capacitor/core@8.0.0/+esm';
+import { registerPlugin } from '@capacitor/core';
 
 const Llama=registerPlugin('Llama');
 const $=s=>document.querySelector(s);
