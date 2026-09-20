@@ -87,7 +87,7 @@ public class LlamaPlugin extends Plugin {
     try{
       if(result.getResultCode()!=android.app.Activity.RESULT_OK||result.getData()==null||result.getData().getData()==null){call.reject("Export cancelled");return;}
       Diagnostic.copyForExport(getContext(),result.getData().getData());call.resolve();
-    }catch(Throwable x){call.reject("Export failed",x);}
+    }catch(Throwable x){call.reject("Export failed",new Exception(x));}
   }
 
   private String name(Uri u){
