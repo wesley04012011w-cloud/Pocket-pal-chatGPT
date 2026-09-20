@@ -79,8 +79,6 @@ jobs:
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 
-          # Stable portable ARM64 baseline. Keep the same llama.cpp build that
-          # already loads GGUF reliably on the test phone.
           set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
           set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
           set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
@@ -115,11 +113,28 @@ jobs:
       - name: Configure Capacitor Android project
         run: |
           set -e
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path("android/app/build.gradle")
-          s=p.read_text()
-          block='''\n          android {\n              ndkVersion "27.2.12479018"\n              defaultConfig {\n                  ndk {\n                      abiFilters "arm64-v8a"\n                  }\n              }\n              externalNativeBuild {\n                  cmake {\n                      path file("src/main/cpp/CMakeLists.txt")\n                      version "3.31.6"\n                  }\n              }\n              packagingOptions {\n                  jniLibs {\n                      useLegacyPackaging true\n                  }\n              }\n          }\n          '''\n          s += "\n" + block\n          p.write_text(s)\n          PY
+          cat >> android/app/build.gradle <<'EOF'
+
+          android {
+              ndkVersion "27.2.12479018"
+              defaultConfig {
+                  ndk {
+                      abiFilters "arm64-v8a"
+                  }
+              }
+              externalNativeBuild {
+                  cmake {
+                      path file("src/main/cpp/CMakeLists.txt")
+                      version "3.31.6"
+                  }
+              }
+              packagingOptions {
+                  jniLibs {
+                      useLegacyPackaging true
+                  }
+              }
+          }
+          EOF
           sed -i 's/android:label="[^"]*"/android:label="VYRA"/' android/app/src/main/AndroidManifest.xml || true
           grep -q 'android.permission.INTERNET' android/app/src/main/AndroidManifest.xml || sed -i '/<manifest /a\    <uses-permission android:name="android.permission.INTERNET"/>' android/app/src/main/AndroidManifest.xml
 
