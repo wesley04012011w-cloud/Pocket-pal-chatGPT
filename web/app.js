@@ -5,7 +5,8 @@ const $=s=>document.querySelector(s);
 let chats=JSON.parse(localStorage.getItem('pp_chats')||'[]');
 let current=chats[0]||{id:crypto.randomUUID(),title:'New chat',messages:[]};
 let model=localStorage.getItem('pp_model')||'';
-let generating=false,raw='',thinking='',answer='',thinkingLive=false;
+let generating=false,raw='',thinking='',answer='',thinkingLive=false,generatedTokens=0,generationStarted=0,generationStats='';
+let downloadedModels=[];let downloading=false;
 let settings=JSON.parse(localStorage.getItem('pp_settings')||'{}');
 const cfg={context:4096,threads:4,batchThreads:8,batch:256,maxTokens:1024,topK:40,temperature:.7,topP:.95,minP:.05,systemPrompt:'',enableThinking:true,flashAttention:true,mmap:true,mlock:false,useJinja:true,...settings};
 
@@ -19,25 +20,47 @@ function messageHtml(){
 }
 
 function render(){
- app.innerHTML='<div class="app"><div class="scrim"></div><aside class="drawer"><div class="brand"><b>PocketPal Local</b><span>Local AI assistant</span></div><div class="nav"><button class="active" id="navChats">▣ &nbsp; Chats</button><button id="newChat">＋ &nbsp; New chat</button><button id="settings">⚙ &nbsp; Settings</button><button id="logs">▤ &nbsp; Logs</button></div><div class="saved">CONVERSATIONS</div><div class="chat-list">'+chats.map(c=>'<button class="chat-row '+(c.id===current.id?'active':'')+'" data-chat="'+c.id+'"><strong>'+esc(c.title)+'</strong><small>'+c.messages.length+' messages</small></button>').join('')+'</div><div class="model-dock"><small>Local model</small><b>'+esc(model||'No model loaded')+'</b></div></aside><main class="shell"><div class="stars" aria-hidden="true"></div><div class="floating-top"><button class="float-btn menu" id="menu" aria-label="Menu">☰</button><div class="float-model">'+esc(model||'No model loaded')+'</div><div class="float-actions"><button class="float-btn" id="edit" aria-label="Focus input">✎</button><button class="float-btn" id="more" aria-label="Settings">⋮</button></div></div><section class="messages" id="messages">'+messageHtml()+'</section><div class="composer-wrap">'+(thinkingLive?'<div class="thinking"><div class="thinking-head"><span class="brain">◉</span><span>Thinking...</span><span style="margin-left:auto">•••</span></div><div class="thinking-body">'+md(thinking)+'</div></div>':'')+'<div class="composer"><div class="input-row"><button class="icon" id="attach">＋</button><textarea class="input" id="input" rows="1" placeholder="Ask assistant..."></textarea><button class="send '+(generating?'stop':'')+'" id="send">'+(generating?'■':'➤')+'</button></div><div class="meta">'+esc(model||'Select a local GGUF model')+'</div></div></div></main></div>';
+ app.innerHTML='<div class="app"><div class="scrim"></div><aside class="drawer"><div class="brand"><b>PocketPal Local</b><span>Local AI assistant</span></div><div class="nav"><button class="active" id="navChats">▣ &nbsp; Chats</button><button id="newChat">＋ &nbsp; New chat</button><button id="models">◈ &nbsp; Models</button><button id="settings">⚙ &nbsp; Settings</button><button id="logs">▤ &nbsp; Logs</button></div><div class="saved">CONVERSATIONS</div><div class="chat-list">'+chats.map(c=>'<button class="chat-row '+(c.id===current.id?'active':'')+'" data-chat="'+c.id+'"><strong>'+esc(c.title)+'</strong><small>'+c.messages.length+' messages</small></button>').join('')+'</div><div class="model-dock"><small>Local model</small><b>'+esc(model||'No model loaded')+'</b></div></aside><main class="shell"><div class="stars" aria-hidden="true"></div><div class="floating-top"><button class="float-btn menu" id="menu" aria-label="Menu">☰</button><div class="float-model">'+esc(model||'No model loaded')+'</div><div class="float-actions"><button class="float-btn" id="edit" aria-label="Focus input">✎</button><button class="float-btn" id="more" aria-label="Settings">⋮</button></div></div><section class="messages" id="messages">'+messageHtml()+'</section><div class="composer-wrap">'+(thinkingLive?'<div class="thinking"><div class="thinking-head"><span class="brain">◉</span><span>Thinking...</span><span style="margin-left:auto">•••</span></div><div class="thinking-body">'+md(thinking)+'</div></div>':'')+'<div class="composer"><div class="input-row"><button class="icon" id="attach">＋</button><textarea class="input" id="input" rows="1" placeholder="Ask assistant..."></textarea><button class="send '+(generating?'stop':'')+'" id="send">'+(generating?'■':'➤')+'</button></div><div class="meta stats" id="stats"></div></div></div></main></div>';
  wire();
  const inp=$('#input');
  if(inp){inp.addEventListener('input',()=>{inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,145)+'px'});inp.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}})}
 }
 
 function wire(){
+ const statsEl=$('#stats');if(statsEl)statsEl.textContent=generationStats;
  document.querySelectorAll('[data-chat]').forEach(b=>b.onclick=()=>{current=chats.find(c=>c.id===b.dataset.chat)||current;render()});
  $('#menu').onclick=()=>{$('.drawer').classList.add('open');$('.scrim').classList.add('open')};
  $('.scrim').onclick=()=>{$('.drawer').classList.remove('open');$('.scrim').classList.remove('open')};
  $('#newChat').onclick=()=>{current={id:crypto.randomUUID(),title:'New chat',messages:[]};save();render()};
- $('#settings').onclick=showSettings;$('#logs').onclick=()=>Llama.exportLog();$('#more').onclick=showSettings;$('#edit').onclick=()=>$('#input')?.focus();
+ $('#settings').onclick=showSettings;$('#models').onclick=showModels;$('#logs').onclick=()=>Llama.exportLog();$('#more').onclick=showSettings;$('#edit').onclick=()=>$('#input')?.focus();
  $('#load')?.addEventListener('click',loadModel);$('#attach').onclick=loadModel;$('#send').onclick=()=>generating?Llama.stop():send();
 }
 
 async function loadModel(){
- try{const p=await Llama.pickModel();if(!p?.path)return;const r=await Llama.loadModel({path:p.path,...cfg});if(r.ok){model=p.name||p.path.split('/').pop();localStorage.setItem('pp_model',model);render()}else alert('Model failed to load. Export the diagnostic log for details.')}
+ try{const p=await Llama.pickModel();if(!p?.path)return;await loadModelPath(p.path,p.name||p.path.split('/').pop())}
  catch(e){console.error(e);alert('Native model error. Export Logs for diagnosis.')}
 }
+async function loadModelPath(path,name){
+ try{const r=await Llama.loadModel({path,...cfg});if(r.ok){model=name||path.split('/').pop();localStorage.setItem('pp_model',model);localStorage.setItem('pp_model_path',path);render()}else alert('Model failed to load. Export the diagnostic log for details.')}
+ catch(e){console.error(e);alert('Model load error. Export Logs for diagnosis.')}
+}
+async function refreshModels(){try{const r=await Llama.listModels();downloadedModels=r?.models||[];return downloadedModels}catch(e){console.error(e);return []}}
+function fmtBytes(n){if(!n)return '0 B';const u=['B','MB','GB'];let i=0,x=n;while(x>=1024&&i<2){x/=1024;i++}return x.toFixed(i?1:0)+' '+u[i]}
+async function showModels(){
+ const list=await refreshModels();
+ const catalog=[
+  {name:'Qwen3 0.6B · Q4_0',file:'Qwen3-0.6B-Q4_0.gguf',size:'429 MB',url:'https://huggingface.co/ggml-org/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_0.gguf?download=true'},
+  {name:'Qwen3 0.6B · Q8_0',file:'Qwen3-0.6B-Q8_0.gguf',size:'805 MB',url:'https://huggingface.co/ggml-org/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf?download=true'},
+  {name:'Qwen3 1.7B · Q4_K_M',file:'Qwen3-1.7B-Q4_K_M.gguf',size:'1.28 GB',url:'https://huggingface.co/tensorblock/Qwen_Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf?download=true'}
+ ];
+ const card=m=>'<div class="model-card"><div class="model-info"><b>'+esc(m.name)+'</b><small>'+esc(m.size||fmtBytes(m.bytes))+'</small></div>'+(m.downloading?'<div class="download-progress"><span style="width:'+Math.max(0,m.percent||0)+'%"></span></div><small class="progress-text">'+(m.percent>=0?m.percent+'%':'Downloading...')+'</small>':(m.loaded?'<button class="model-btn active-model" data-unload="1">Loaded · Unload</button>':'<button class="model-btn" data-load-path="'+esc(m.path||'')+'">'+(m.path?'Load':'Download')+'</button>'))+'</div>';
+ document.body.insertAdjacentHTML('beforeend','<div class="models-page"><div class="models-head"><button class="float-btn" id="closeModels">‹</button><div><b>Models</b><small>Download, import and manage GGUF files</small></div></div><div class="import-box"><button class="import-model" id="importModel">＋ Import GGUF</button><small>Choose a .gguf file from your device</small></div><section><h3>Models to download</h3><div class="model-list" id="catalog">'+catalog.map(x=>card(x)).join('')+'</div></section><div class="section-line"></div><section><h3>Downloaded models</h3><div class="model-list" id="downloaded">'+(list.length?list.map(x=>card({...x,loaded:x.name===model})).join(''):'<div class="no-models">No downloaded models yet.</div>')+'</div></section></div>');
+ const close=()=>document.querySelector('.models-page')?.remove();$('#closeModels').onclick=close;$('#importModel').onclick=async()=>{close();await loadModel()};
+ document.querySelectorAll('[data-load-path]').forEach(b=>b.onclick=()=>loadModelPath(b.dataset.loadPath,b.dataset.loadPath.split('/').pop()));
+ document.querySelectorAll('[data-unload]').forEach(b=>b.onclick=async()=>{await Llama.unloadModel();model='';localStorage.removeItem('pp_model');localStorage.removeItem('pp_model_path');close();showModels()});
+ document.querySelectorAll('#catalog .model-btn').forEach((b,i)=>b.onclick=async()=>{if(downloading)return;downloading=true;const item=catalog[i];b.disabled=true;b.textContent='Downloading...';try{await Llama.downloadModel({url:item.url,name:item.file});await refreshModels();close();showModels()}catch(e){alert(String(e));b.disabled=false;b.textContent='Download'}finally{downloading=false}});
+}
+
 
 function parseThinking(s){
  const tags=[['<think>','</think>'],['<thinking>','</thinking>'],['<|thinking|>','<|end_thinking|>'],['<|begin_of_thought|>','<|end_of_thought|>'],['<|begin_of_thinking|>','<|end_of_thinking|>'],['<｜begin▁of▁thinking｜>','<｜end▁of▁thinking｜>']];
@@ -54,19 +77,20 @@ async function send(){
  if(!model){await loadModel();return}
  if(current.title==='New chat')current.title=text.slice(0,42);
  current.messages.push({role:'user',content:text});current.messages.push({role:'assistant',content:'',thinking:''});
- save();raw='';thinking='';answer='';thinkingLive=false;generating=true;render();
+ save();raw='';thinking='';answer='';thinkingLive=false;generatedTokens=0;generationStarted=performance.now();generationStats='0 tokens · 0.0 tok/s';generating=true;render();
  const roles=current.messages.slice(0,-1).map(x=>x.role),contents=current.messages.slice(0,-1).map(x=>x.content);
  try{await Llama.generate({roles,contents,...cfg})}catch(e){console.error(e);generating=false;render()}
 }
 
 Llama.addListener('token',ev=>{
  if(!ev.text)return;
+ generatedTokens++;const elapsed=Math.max(.001,(performance.now()-generationStarted)/1000);generationStats=generatedTokens+' tokens · '+(generatedTokens/elapsed).toFixed(1)+' tok/s';
  raw+=ev.text;const p=parseThinking(raw);thinking=p.thinking;answer=p.answer;thinkingLive=p.active;
  const a=current.messages[current.messages.length-1];a.thinking=thinking;a.content=answer;save();render();
  const m=$('#messages');if(m)m.scrollTop=m.scrollHeight;
 });
 Llama.addListener('generationDone',()=>{
- const p=parseThinking(raw);const a=current.messages[current.messages.length-1];a.thinking=p.thinking;a.content=p.answer;thinkingLive=false;generating=false;save();render();
+ const p=parseThinking(raw);const a=current.messages[current.messages.length-1];a.thinking=p.thinking;a.content=p.answer;thinkingLive=false;generating=false;const elapsed=Math.max(.001,(performance.now()-generationStarted)/1000);generationStats=generatedTokens+' tokens · '+(generatedTokens/elapsed).toFixed(1)+' tok/s';save();render();
 });
 Llama.addListener('nativeError',e=>console.error('nativeError',e));
 
