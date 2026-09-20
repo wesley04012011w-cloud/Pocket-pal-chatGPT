@@ -84,7 +84,7 @@ function App(){
     <div className="composer"><div className="input-row"><button className="icon" onClick={pickAndLoad} aria-label="Load model"><Icon name="plus"/></button><textarea className="input" rows="1" value={input} onChange={e=>{setInput(e.target.value);e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,145)+'px'}} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}}} placeholder="Ask assistant..."/><button className={'send '+(generating?'stop':'')} onClick={()=>generating?Llama.stop():send()} aria-label={generating?'Stop':'Send'}><Icon name={generating?'stop':'send'}/></button></div><div className="meta stats">{stream.stats}</div></div>
    </div>
   </main>}
-  {settingsOpen&&<Settings cfg={cfg} onClose={()=>setSettingsOpen(false)} onApply={next=>{setCfg(next);setSettingsOpen(false)}} onLogs={()=>Llama.exportLog()}/>}
+  {settingsOpen&&<EngineSettings cfg={engineCfg} onClose={()=>setSettingsOpen(false)} onApply={next=>{setEngineCfg(next);setSettingsOpen(false)}} onLogs={()=>Llama.exportLog()}/>} {chatSettingsOpen&&<ChatSettings cfg={chatCfg} onClose={()=>setChatSettingsOpen(false)} onApply={next=>{setChatCfg(next);setChatSettingsOpen(false)}}/>}
  </div>
 }
 
@@ -92,6 +92,43 @@ function Splash(){return <div className="splash"><div className="splash-mark"><I
 
 function ModelsPage({downloaded,model,downloading,onBack,onImport,onDownload,onLoad,onUnload}){return <div className="models-page"><div className="models-head"><button className="float-btn" onClick={onBack}><Icon name="back"/></button><div><b>Models</b><small>Download, import and manage GGUF files</small></div></div><div className="import-box"><button className="import-model" onClick={onImport}><Icon name="upload"/>Import GGUF</button><small>Choose a .gguf file from your device</small></div><section><h3>Models to download</h3><div className="model-list">{CATALOG.map(x=><div className="model-card" key={x.file}><div className="model-info"><b>{x.name}</b><small>{x.size}</small></div><button className="model-btn" disabled={!!downloading} onClick={()=>onDownload(x)}>{downloading===x.file?'Downloading...':'Download'}</button></div>)}</div></section><div className="section-line"/><section><h3>Downloaded models</h3><div className="model-list">{downloaded.length?downloaded.map(x=>{const size=CATALOG.find(c=>c.file===x.name)?.size||fmtBytes(x.bytes);return <div className="model-card" key={x.path}><div className="model-info"><b>{x.name}</b><small>{size}</small></div>{x.name===model?<button className="model-btn active-model" onClick={onUnload}>Loaded · Unload</button>:<button className="model-btn" onClick={()=>onLoad(x.path,x.name)}>Load</button>}</div>}):<div className="no-models">No downloaded models yet.</div>}</div></section></div>}
 
-function Settings({cfg,onClose,onApply,onLogs}){const [v,setV]=useState({...cfg});const fields=[['context','Context'],['threads','Generation threads'],['batchThreads','Prompt threads'],['batch','Batch size'],['maxTokens','Max output tokens'],['topK','Top K'],['temperature','Temperature'],['topP','Top P'],['minP','Min P']];return <div className="settings-page"><header className="settings-head"><button className="float-btn" onClick={onClose}><Icon name="back"/></button><div><b>Settings</b><small>Local model and app diagnostics</small></div></header><div className="settings-content"><section className="settings-section"><h3>Generation</h3>{fields.map(([k,l])=><div className="field" key={k}><label>{l}</label><input inputMode="decimal" value={v[k]} onChange={e=>setV({...v,[k]:Number(e.target.value)})}/></div>)}<div className="field"><label>System prompt</label><textarea rows="3" value={v.systemPrompt} onChange={e=>setV({...v,systemPrompt:e.target.value})}/></div>{[['enableThinking','Enable thinking / reasoning'],['flashAttention','Flash Attention'],['mmap','Memory map model'],['mlock','Lock model in RAM'],['useJinja','Use Jinja chat templates']].map(([k,l])=><label className="check" key={k}><input type="checkbox" checked={!!v[k]} onChange={e=>setV({...v,[k]:e.target.checked})}/>{l}</label>)}</section><section className="settings-section diagnostics"><h3>Diagnostics</h3><button className="log-button" onClick={onLogs}><Icon name="log"/><span><b>Export diagnostic logs</b><small>Save a log file for troubleshooting</small></span></button></section></div><footer className="settings-footer"><button onClick={onClose}>Cancel</button><button className="primary" onClick={()=>onApply(v)}>Apply changes</button></footer></div>}
+function Toggle({value,onChange,label}){return <button type="button" className={'toggle '+(value?'on':'')} onClick={()=>onChange(!value)} aria-label={label}><span/></button>}
+function Range({value,min,max,step,onChange,suffix=''}){return <div className="range-wrap"><input type="range" min={min} max={max} step={step} value={value} onChange={e=>onChange(Number(e.target.value))}/><output>{value}{suffix}</output></div>}
 
+function ChatSettings({cfg,onClose,onApply}){
+ const [v,setV]=useState({...cfg});
+ return <div className="settings-page"><header className="settings-head"><button className="float-btn" onClick={onClose}><Icon name="back"/></button><div><b>Chat settings</b><small>How the model responds</small></div></header>
+ <div className="settings-content"><section className="settings-section"><h3>Generation</h3>
+  <div className="slider-field"><label>Temperature <b>{v.temperature.toFixed(2)}</b></label><Range value={v.temperature} min={0} max={2} step={.05} onChange={x=>setV({...v,temperature:x})}/></div>
+  <div className="slider-field"><label>Top P <b>{v.topP.toFixed(2)}</b></label><Range value={v.topP} min={0} max={1} step={.01} onChange={x=>setV({...v,topP:x})}/></div>
+  <div className="slider-field"><label>Min P <b>{v.minP.toFixed(2)}</b></label><Range value={v.minP} min={0} max={1} step={.01} onChange={x=>setV({...v,minP:x})}/></div>
+  <div className="slider-field"><label>Top K <b>{v.topK}</b></label><Range value={v.topK} min={0} max={100} step={1} onChange={x=>setV({...v,topK:x})}/></div>
+  <div className="slider-field"><label>Max output <b>{v.maxTokens}</b></label><Range value={v.maxTokens} min={64} max={4096} step={64} onChange={x=>setV({...v,maxTokens:x})}/></div>
+  <div className="slider-field"><label>Repetition penalty <b>{v.repeatPenalty.toFixed(2)}</b></label><Range value={v.repeatPenalty} min={1} max={1.5} step={.01} onChange={x=>setV({...v,repeatPenalty:x})}/></div>
+  <div className="slider-field"><label>Repeat window <b>{v.repeatLastN}</b></label><Range value={v.repeatLastN} min={0} max={256} step={8} onChange={x=>setV({...v,repeatLastN:x})}/></div>
+  <div className="field"><label>System prompt</label><textarea rows="5" value={v.systemPrompt} onChange={e=>setV({...v,systemPrompt:e.target.value})} placeholder="Optional instructions for every chat"/></div>
+  <div className="setting-row"><span><b>Thinking / reasoning</b><small>Allow supported models to use a thinking section</small></span><Toggle value={!!v.enableThinking} onChange={x=>setV({...v,enableThinking:x})} label="Thinking"/></div>
+  <div className="setting-row"><span><b>Jinja chat template</b><small>Use the model's chat template when available</small></span><Toggle value={!!v.useJinja} onChange={x=>setV({...v,useJinja:x})} label="Jinja"/></div>
+ </section></div>
+ <footer className="settings-footer"><button onClick={onClose}>Cancel</button><button className="primary" onClick={()=>onApply(v)}>Apply changes</button></footer></div>
+}
+
+function EngineSettings({cfg,onClose,onApply,onLogs}){
+ const [v,setV]=useState({...cfg});
+ return <div className="settings-page"><header className="settings-head"><button className="float-btn" onClick={onClose}><Icon name="back"/></button><div><b>Settings</b><small>Engine, memory and CPU</small></div></header>
+ <div className="settings-content">
+  <section className="settings-section"><h3>Engine</h3>
+   <div className="slider-field"><label>Context / KV cache <b>{v.context}</b></label><Range value={v.context} min={512} max={8192} step={512} onChange={x=>setV({...v,context:x})}/></div>
+   <div className="slider-field"><label>Generation cores <b>{v.threads}</b></label><Range value={v.threads} min={1} max={8} step={1} onChange={x=>setV({...v,threads:x})}/></div>
+   <div className="slider-field"><label>Prompt cores <b>{v.batchThreads}</b></label><Range value={v.batchThreads} min={1} max={8} step={1} onChange={x=>setV({...v,batchThreads:x})}/></div>
+   <div className="slider-field"><label>Batch size <b>{v.batch}</b></label><Range value={v.batch} min={32} max={512} step={32} onChange={x=>setV({...v,batch:x})}/></div>
+   <div className="setting-row"><span><b>Flash Attention</b><small>Use the optimized attention path</small></span><Toggle value={!!v.flashAttention} onChange={x=>setV({...v,flashAttention:x})} label="Flash Attention"/></div>
+   <div className="setting-row"><span><b>Memory map (mmap)</b><small>Map model pages instead of copying them</small></span><Toggle value={!!v.mmap} onChange={x=>setV({...v,mmap:x})} label="Memory map"/></div>
+   <div className="setting-row"><span><b>Lock model in RAM</b><small>Keep mapped model pages resident when possible</small></span><Toggle value={!!v.mlock} onChange={x=>setV({...v,mlock:x})} label="Lock RAM"/></div>
+   <div className="setting-row"><span><b>Offload KQV</b><small>Allow K/Q/V work to use the backend when available</small></span><Toggle value={!!v.offloadKQV} onChange={x=>setV({...v,offloadKQV:x})} label="Offload KQV"/></div>
+  </section>
+  <section className="settings-section diagnostics"><h3>Diagnostics</h3><button className="log-button" onClick={onLogs}><Icon name="log"/><span><b>Export diagnostic logs</b><small>Save a log file for troubleshooting</small></span></button></section>
+ </div>
+ <footer className="settings-footer"><button onClick={onClose}>Cancel</button><button className="primary" onClick={()=>onApply(v)}>Apply changes</button></footer></div>
+}
 createRoot(document.getElementById('app')).render(<App/>);
