@@ -7,7 +7,7 @@ let current=chats[0]||{id:crypto.randomUUID(),title:'New chat',messages:[]};
 let model=localStorage.getItem('pp_model')||'';
 let generating=false,raw='',thinking='',answer='',thinkingLive=false;
 let settings=JSON.parse(localStorage.getItem('pp_settings')||'{}');
-const cfg={context:8192,threads:4,batchThreads:8,batch:512,maxTokens:1024,topK:40,temperature:.7,topP:.95,minP:.05,systemPrompt:'',enableThinking:true,flashAttention:true,mmap:true,mlock:false,useJinja:true,...settings};
+const cfg={context:4096,threads:4,batchThreads:8,batch:256,maxTokens:1024,topK:40,temperature:.7,topP:.95,minP:.05,systemPrompt:'',enableThinking:true,flashAttention:true,mmap:true,mlock:false,useJinja:true,...settings};
 
 function save(){const i=chats.findIndex(x=>x.id===current.id);if(i>=0)chats[i]=current;else chats.unshift(current);localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_settings',JSON.stringify(cfg))}
 function esc(s){return String(s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
