@@ -48,7 +48,7 @@ function App(){
  const genRef=useRef({count:0,start:0,raw:''}),genLiveRef=useRef(false),chatIdRef=useRef(chatId),streamRef=useRef(stream),rafRef=useRef(null);
  const current=useMemo(()=>chats.find(c=>c.id===chatId)||chats[0],[chats,chatId]);
  useEffect(()=>{chatIdRef.current=chatId},[chatId]);useEffect(()=>{streamRef.current=stream},[stream]);
- useEffect(()=>{localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_engine_settings',JSON.stringify(engineCfg));localStorage.setItem('pp_chat_settings',JSON.stringify(chatCfg))},[chats,cfg]);
+ useEffect(()=>{localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_engine_settings',JSON.stringify(engineCfg));localStorage.setItem('pp_chat_settings',JSON.stringify(chatCfg))},[chats,engineCfg,chatCfg]);
  useEffect(()=>{const t=setTimeout(()=>setLoading(false),520);return()=>clearTimeout(t)},[]);
  const patchCurrent=useCallback(fn=>setChats(prev=>prev.map(c=>c.id===chatIdRef.current?fn(c):c)),[]);
  const refreshModels=useCallback(async()=>{try{const r=await Llama.listModels();setDownloaded(r?.models||[])}catch{}},[]);
