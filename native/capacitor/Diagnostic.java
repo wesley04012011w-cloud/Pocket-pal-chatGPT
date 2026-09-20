@@ -26,6 +26,12 @@ public final class Diagnostic {
       file=new File(dir,"pocketpal_diagnostics.log");
       log("=== SESSION START ===");
       log("app="+c.getPackageName()+" sdk="+Build.VERSION.SDK_INT+" abi="+Build.SUPPORTED_ABIS[0]);
+      ActivityManager am=(ActivityManager)c.getSystemService(Context.ACTIVITY_SERVICE);
+      if(am!=null){
+        ActivityManager.MemoryInfo mi=new ActivityManager.MemoryInfo();
+        am.getMemoryInfo(mi);
+        log("MEM total="+mi.totalMem+" avail="+mi.availMem+" low="+mi.lowMemory+" threshold="+mi.threshold);
+      }
       if(Build.VERSION.SDK_INT>=30){
         List<ApplicationExitInfo> exits=((ActivityManager)c.getSystemService(Context.ACTIVITY_SERVICE)).getHistoricalProcessExitReasons(c.getPackageName(),0,5);
         if(!exits.isEmpty()){
