@@ -46,7 +46,25 @@ public class LlamaPlugin extends Plugin {
   @PluginMethod
   public void loadModel(PluginCall call){
     String path=call.getString("path");if(path==null){call.reject("Missing model path");return;}
-    int context=call.getInt("context",8192),threads=call.getInt("threads",4),bt=call.getInt("batchThreads",8),batch=call.getInt("batch",512);
+    int requestedContext=call.getInt("context",4096),threads=call.getInt("threads",4),bt=call.getInt("batchThreads",8),requestedBatch=call.getInt("batch",256);
+    File modelFile=new File(path);
+    long modelBytes=modelFile.length();
+    // Keep the default mobile profile conservative: Q8 GGUFs can use substantial KV-cache RAM.
+    int context=Math.min(Math.max(512,requestedContext),4096);
+    int batch=Math.min(Math.max(32,requestedBatch),256);
+    android.app.ActivityManager am=(android.app.ActivityManager)getContext().getSystemService(android.content.Context.ACTIVITY_SERVICE);
+    if(am!=null){
+      android.app.ActivityManager.MemoryInfo mi=new android.app.ActivityManager.MemoryInfo();
+      am.getMemoryInfo(mi);
+      if(mi.lowMemory || mi.availMem < 900L*1024L*1024L){
+        context=Math.min(context,2048);
+        batch=Math.min(batch,128);
+      }else if(modelBytes > 500L*1024L*1024L){
+        context=Math.min(context,3072);
+        batch=Math.min(batch,192);
+      }
+      Diagnostic.log("MODEL profile bytes="+modelBytes+" requestedContext="+requestedContext+" context="+context+" requestedBatch="+requestedBatch+" batch="+batch+" avail="+mi.availMem+" low="+mi.lowMemory);
+    }
     boolean flash=call.getBoolean("flashAttention",true),mmap=call.getBoolean("mmap",true),mlock=call.getBoolean("mlock",false);
     Executors.newSingleThreadExecutor().execute(()->{
       Diagnostic.log("MODEL load start path="+path);
