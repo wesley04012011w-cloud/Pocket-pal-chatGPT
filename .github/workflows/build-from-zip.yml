@@ -1005,48 +1005,10 @@ jobs:
 
           EOF
 
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path("android/app/src/main/java/dev/pocketpal/local/MainActivity.java")
-          s=p.read_text()
-          s=s.replace("import android.widget.Button;\n","import android.widget.Button;\nimport android.widget.CheckBox;\nimport android.text.InputType;\nimport android.text.SpannableStringBuilder;\n")
-          s=s.replace("private File modelFile;\n","""private File modelFile;
-          private int context=8192,threads=4,batchThreads=8,batch=512,maxTokens=1024;
-          private float temperature=0.7f,topP=0.95f,minP=0.05f; private int topK=40; private long seed=-1L;
-          private boolean useJinja=true,enableThinking=true,flashAttention=true,mmap=true,mlock=false; private String systemPrompt="";
-          """)
-          s=s.replace("""roles, contents, 1024, 0.7f, 0.95f, 40, 0.05f, -1L,
-                                        (piece, done) -> {""","""roles, contents, maxTokens, temperature, topP, topK, minP, seed,
-                                        useJinja, enableThinking, systemPrompt,
-                                        (piece, done) -> {""")
-          start=s.index("private void showSettings()")
-          end=s.index("@Override protected void onDestroy()",start)
-          settings="""private EditText sf(String h,String v,int t){EditText e=new EditText(this);e.setHint(h);e.setText(v);e.setTextColor(TEXT);e.setHintTextColor(MUTED);e.setInputType(t);return e;}
-          private CheckBox sc(String h,boolean v){CheckBox c=new CheckBox(this);c.setText(h);c.setTextColor(TEXT);c.setChecked(v);return c;}
-          private int cl(int v,int a,int b){return Math.max(a,Math.min(b,v));} private float cf(float v,float a,float b){return Math.max(a,Math.min(b,v));}
-          private void showSettings(){
-           ScrollView sv=new ScrollView(this);LinearLayout b=new LinearLayout(this);b.setOrientation(LinearLayout.VERTICAL);b.setPadding(dp(18),dp(8),dp(18),dp(8));sv.addView(b); Button logButton=button("Export diagnostic log"); logButton.setOnClickListener(v->exportDiagnosticLog()); b.addView(logButton);
-           CheckBox j=sc("Use Jinja chat template",useJinja),thk=sc("Enable thinking / reasoning",enableThinking),fl=sc("Flash Attention",flashAttention),mm=sc("MMap model file",mmap),ram=sc("Keep model in RAM (MLOCK)",mlock);
-           b.addView(j);b.addView(thk);b.addView(fl);b.addView(mm);b.addView(ram);
-           EditText c=sf("Context",String.valueOf(context),2),t=sf("Generation threads",String.valueOf(threads),2),bt=sf("Prompt threads",String.valueOf(batchThreads),2),ba=sf("Batch",String.valueOf(batch),2),mx=sf("Max output tokens",String.valueOf(maxTokens),2),te=sf("Temperature",String.valueOf(temperature),8194),tp=sf("Top P",String.valueOf(topP),8194),tk=sf("Top K",String.valueOf(topK),2),mp=sf("Min P",String.valueOf(minP),8194),se=sf("Seed (-1=random)",String.valueOf(seed),4098),sy=sf("System prompt",systemPrompt,InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-           sy.setMinLines(3);b.addView(c);b.addView(t);b.addView(bt);b.addView(ba);b.addView(mx);b.addView(te);b.addView(tp);b.addView(tk);b.addView(mp);b.addView(se);b.addView(sy);
-           new AlertDialog.Builder(this).setTitle("Local model settings").setView(sv).setPositiveButton("Apply",(d,w)->{try{
-            context=cl(Integer.parseInt(c.getText().toString()),512,131072);threads=cl(Integer.parseInt(t.getText().toString()),1,32);batchThreads=cl(Integer.parseInt(bt.getText().toString()),1,32);batch=cl(Integer.parseInt(ba.getText().toString()),32,4096);maxTokens=cl(Integer.parseInt(mx.getText().toString()),1,8192);
-            temperature=cf(Float.parseFloat(te.getText().toString()),0,2);topP=cf(Float.parseFloat(tp.getText().toString()),0,1);topK=cl(Integer.parseInt(tk.getText().toString()),0,200);minP=cf(Float.parseFloat(mp.getText().toString()),0,1);seed=Long.parseLong(se.getText().toString());systemPrompt=sy.getText().toString();
-            useJinja=j.isChecked();enableThinking=thk.isChecked();flashAttention=fl.isChecked();mmap=mm.isChecked();mlock=ram.isChecked();if(modelFile!=null&&loaded)loadModel();
-           }catch(Exception e){Toast.makeText(this,"Invalid settings: "+e.getMessage(),Toast.LENGTH_LONG).show();}}).setNegativeButton("Cancel",null).show();
-          }
-          """
-          s=s[:start]+settings+s[end:]
-          # Replace the old string-concatenation rendering with Spannable-safe rendering.
-          s=s.replace('''thinking.setText(parts.thinking.isEmpty() ? "" : "🧠  Thinking\\n\\n" + MarkdownRenderer.render(parts.thinking));
-                                                thinking.setVisibility(parts.thinking.isEmpty() ? View.GONE : View.VISIBLE);
-                                                chat.setText(header + "You\\n" + MarkdownRenderer.render(prompt) + "\\n\\nAssistant\\n" + MarkdownRenderer.render(parts.answer));''','''if(parts.thinking.isEmpty()) thinking.setVisibility(View.GONE);
-                                                else { SpannableStringBuilder tb=new SpannableStringBuilder("🧠  Thinking\\n\\n"); tb.append(MarkdownRenderer.render(parts.thinking)); thinking.setText(tb); thinking.setVisibility(View.VISIBLE); }
-                                                SpannableStringBuilder cb=new SpannableStringBuilder(); cb.append(header).append("You\\n").append(MarkdownRenderer.render(prompt)).append("\\n\\nAssistant\\n").append(MarkdownRenderer.render(parts.answer)); chat.setText(cb);''')
-          p.write_text(s)
+          mkdir -p android/app/src/main/res/drawable
+          cp "$GITHUB_WORKSPACE/native/android/MainActivity.java" android/app/src/main/java/dev/pocketpal/local/MainActivity.java
+          cp "$GITHUB_WORKSPACE/native/android/icons/"*.xml android/app/src/main/res/drawable/
 
-          PY
           cat > android/README.md <<'EOF'
           # PocketPal Local — Native Android
 
