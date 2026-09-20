@@ -1,0 +1,8 @@
+{
+  "name":"pocketpal-local",
+  "version":"0.2.0",
+  "private":true,
+  "scripts":{"build":"echo web-static-ready","cap:sync":"npx cap sync android"},
+  "dependencies":{"@capacitor/android":"^8.0.0","@capacitor/core":"^8.0.0"},
+  "devDependencies":{"@capacitor/cli":"^8.0.0"}
+}
