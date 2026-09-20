@@ -138,7 +138,7 @@ public class LlamaPlugin extends Plugin {
     final boolean loadFlash=flash,loadMmap=mmap,loadMlock=mlock,loadOffloadKQV=offloadKQV;
     Executors.newSingleThreadExecutor().execute(()->{
       Diagnostic.log("MODEL load start path="+loadPath+" context="+loadContext+" batch="+loadBatch);
-      boolean ok=NativeBridge.nativeLoad(loadPath,loadContext,loadThreads,loadBatchThreads,loadFlash,loadMmap,loadMlock,loadOffloadKQV);
+      boolean ok=NativeBridge.nativeLoad(loadPath,loadContext,loadThreads,loadBatchThreads,loadBatch,loadFlash,loadMmap,loadMlock,loadOffloadKQV);
       Diagnostic.log("MODEL load result="+ok);
       JSObject r=new JSObject();r.put("ok",ok);if(ok)r.put("name",new File(path).getName());call.resolve(r);
     });
