@@ -1,15 +1,17 @@
-name: Build Native Android APK
+name: Build Capacitor Android APK
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "*.zip"
+      - "package.json"
+      - "capacitor.config.json"
+      - "web/**"
+      - "native/capacitor/**"
       - ".github/workflows/build-from-zip.yml"
 
 permissions:
   contents: read
-  # Native UI source/icons are copied from native/android during project generation.
 
 jobs:
   build:
@@ -22,26 +24,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find and extract project ZIP
-        run: |
-          set -e
-          shopt -s nullglob
-          zips=( "$GITHUB_WORKSPACE"/*.zip )
-          if [ "${#zips[@]}" -ne 1 ]; then
-            echo "::error::Deixe exatamente um ZIP na raiz do repositório."
-            printf '%s\n' "${zips[@]}"
-            exit 1
-          fi
-          ZIP_PATH="${zips[0]}"
-          rm -rf extracted
-          mkdir extracted
-          unzip -q "$ZIP_PATH" -d extracted
-          PROJECT_DIR="$(find "$GITHUB_WORKSPACE/extracted" -name package.json -type f -print -quit | xargs -r dirname)"
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "::error::package.json não encontrado no ZIP."
-            exit 1
-          fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Add Capacitor Android
+        run: npx cap add android
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -60,109 +56,21 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "cmake;3.31.6" "ndk;27.2.12479018"
 
       - name: Fetch llama.cpp
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
-          TAG="$(tr -d '\r\n' < llama.cpp.version)"
-          if [ "$TAG" != "v0.4.1" ]; then TAG="v0.4.1"; fi
-          git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp.git llama.cpp
+          git clone --depth 1 --branch v0.4.1 https://github.com/ggml-org/llama.cpp.git llama.cpp
 
-      - name: Create native Android project
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Inject native engine and diagnostics
         run: |
           set -e
-
-          rm -rf android
           mkdir -p android/app/src/main/java/dev/pocketpal/local
           mkdir -p android/app/src/main/cpp
-          mkdir -p android/app/src/main/res/values
 
-          cp native/android/LlamaEngine.cpp android/app/src/main/cpp/LlamaEngine.cpp
-
-          cat > android/settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "PocketPalLocal"
-          include(":app")
-          EOF
-
-          cat > android/build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application' version '8.13.2' apply false
-          }
-          EOF
-
-          cat > android/gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          android.nonTransitiveRClass=true
-          EOF
-
-          cat > android/app/build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application'
-          }
-
-          android {
-              namespace 'dev.pocketpal.local'
-              compileSdk 35
-
-              defaultConfig {
-                  applicationId 'dev.pocketpal.local'
-                  minSdk 26
-                  targetSdk 35
-                  versionCode 1
-                  versionName '0.1.0'
-                  ndkVersion '27.2.12479018'
-
-                  ndk {
-                      abiFilters 'arm64-v8a'
-                  }
-
-                  externalNativeBuild {
-                      cmake {
-                          cppFlags '-std=c++17', '-O3', '-DNDEBUG'
-                      }
-                  }
-              }
-
-              buildTypes {
-                  debug {
-                      minifyEnabled false
-                  }
-              }
-
-              externalNativeBuild {
-                  cmake {
-                      path file('src/main/cpp/CMakeLists.txt')
-                      version '3.31.6'
-                  }
-              }
-
-              packaging {
-                  jniLibs {
-                      useLegacyPackaging true
-                  }
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          }
-          EOF
+          cp native/capacitor/MainActivity.java android/app/src/main/java/dev/pocketpal/local/MainActivity.java
+          cp native/capacitor/Diagnostic.java android/app/src/main/java/dev/pocketpal/local/Diagnostic.java
+          cp native/capacitor/NativeBridge.java android/app/src/main/java/dev/pocketpal/local/NativeBridge.java
+          cp native/capacitor/LlamaPlugin.java android/app/src/main/java/dev/pocketpal/local/LlamaPlugin.java
+          cp native/capacitor/LlamaEngine.cpp android/app/src/main/cpp/LlamaEngine.cpp
 
           cat > android/app/src/main/cpp/CMakeLists.txt <<'EOF'
           cmake_minimum_required(VERSION 3.22)
@@ -172,12 +80,8 @@ jobs:
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 
-          # Build optimized ARM kernels with runtime CPU-variant dispatch.
-          # This avoids illegal-instruction crashes on devices that do not
-          # support every newer ARM extension (for example i8mm).
-          # Keep the CPU backend statically linked into the APK.
-          # Dynamic GGML backends are not automatically packaged by Android Gradle.
-          # Use the portable armv8-a baseline to avoid SIGILL on older ARM64 phones.
+          # Stable portable ARM64 baseline. Keep the same llama.cpp build that
+          # already loads GGUF reliably on the test phone.
           set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
           set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
           set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
@@ -185,7 +89,6 @@ jobs:
           set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
           set(LLAMA_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../../llama.cpp")
-
           set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
           set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
           set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
@@ -202,833 +105,61 @@ jobs:
 
           add_library(pocketpal_local SHARED LlamaEngine.cpp)
           target_include_directories(pocketpal_local PRIVATE
-              "${LLAMA_CPP_DIR}/include"
-              "${LLAMA_CPP_DIR}/common"
-              "${LLAMA_CPP_DIR}/ggml/include"
+            "${LLAMA_CPP_DIR}/include"
+            "${LLAMA_CPP_DIR}/common"
+            "${LLAMA_CPP_DIR}/ggml/include"
           )
           target_link_libraries(pocketpal_local PRIVATE llama llama-common log)
           EOF
 
-          cat > android/app/src/main/AndroidManifest.xml <<'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <application
-                  android:allowBackup="false"
-                  android:hardwareAccelerated="true"
-                  android:label="PocketPal Local"
-                  android:theme="@style/AppTheme"
-                  android:supportsRtl="true">
-                  <activity
-                      android:name=".MainActivity"
-                      android:screenOrientation="portrait"
-                      android:exported="true"
-                      android:windowSoftInputMode="adjustResize">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-          cat > android/app/src/main/res/values/styles.xml <<'EOF'
-          <resources>
-              <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
-                  <item name="android:fontFamily">sans</item>
-                  <item name="android:windowLightStatusBar">false</item>
-                  <item name="android:statusBarColor">#09090B</item>
-                  <item name="android:navigationBarColor">#09090B</item>
-                  <item name="android:windowLightNavigationBar">false</item>
-                  <item name="android:colorAccent">#E8E8EA</item>
-                  <item name="android:windowActionModeOverlay">true</item>
-              </style>
-          </resources>
-          EOF
-
-          cat > android/app/src/main/java/dev/pocketpal/local/MarkdownRenderer.java <<'EOF'
-          package dev.pocketpal.local;
-
-          import android.graphics.Typeface;
-          import android.text.SpannableStringBuilder;
-          import android.text.Spanned;
-          import android.text.style.BackgroundColorSpan;
-          import android.text.style.ForegroundColorSpan;
-          import android.text.style.LeadingMarginSpan;
-          import android.text.style.RelativeSizeSpan;
-          import android.text.style.StyleSpan;
-          import android.text.style.TypefaceSpan;
-
-          public final class MarkdownRenderer {
-            private MarkdownRenderer(){}
-            public static Spanned render(String src){
-              if(src==null)src="";
-              SpannableStringBuilder out=new SpannableStringBuilder();
-              String[] lines=src.replace("\r","").split("\n",-1); boolean code=false; StringBuilder cb=new StringBuilder();
-              for(int i=0;i<lines.length;i++){
-                String line=lines[i];
-                if(line.trim().startsWith("\u0060\u0060\u0060")){
-                  if(code){appendCode(out,cb.toString());cb.setLength(0);code=false;}else code=true;
-                  continue;
-                }
-                if(code){cb.append(line);if(i<lines.length-1)cb.append("\n");continue;}
-                appendLine(out,line); if(i<lines.length-1)out.append("\n");
-              }
-              if(code)appendCode(out,cb.toString()); return out;
-            }
-            private static void appendLine(SpannableStringBuilder o,String l){
-              String t=l.trim(); int st=o.length();
-              if(t.matches("^#{1,6}\\s+.*")){appendInline(o,t.replaceFirst("^#{1,6}\\s+",""));o.setSpan(new StyleSpan(Typeface.BOLD),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new RelativeSizeSpan(1.18f),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return;}
-              if(t.matches("^>\\s?.*")){appendInline(o,t.replaceFirst("^>\\s?",""));o.setSpan(new LeadingMarginSpan.Standard(18,8),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new ForegroundColorSpan(0xff9b9ba4),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return;}
-              if(t.matches("^[-*+]\\s+.*")){appendInline(o,"• "+t.replaceFirst("^[-*+]\\s+",""));o.setSpan(new LeadingMarginSpan.Standard(18,0),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return;}
-              if(t.matches("^\\d+[.)]\\s+.*")){appendInline(o,t.replaceFirst("^(\\d+)[.)]\\s+","$1. "));o.setSpan(new LeadingMarginSpan.Standard(22,0),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return;}
-              appendInline(o,l);
-            }
-            private static void appendCode(SpannableStringBuilder o,String code){
-              if(o.length()>0&&o.charAt(o.length()-1)=='\n')o.delete(o.length()-1,o.length()); int st=o.length();
-              o.append(code.length()==0?" ":code); int en=o.length();
-              o.setSpan(new BackgroundColorSpan(0xff1c1c21),st,en,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new ForegroundColorSpan(0xffeeeeF0),st,en,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new TypefaceSpan(Typeface.MONOSPACE),st,en,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new LeadingMarginSpan.Standard(20,20),st,en,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.append("\n");
-            }
-            private static void appendInline(SpannableStringBuilder o,String s){
-              for(int i=0;i<s.length();){
-                if(i+1<s.length()&&s.charAt(i)=='*'&&s.charAt(i+1)=='*'){int e=s.indexOf("**",i+2);if(e>i+2){int st=o.length();o.append(s.substring(i+2,e));o.setSpan(new StyleSpan(Typeface.BOLD),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);i=e+2;continue;}}
-                if(s.charAt(i)=='`'){int e=s.indexOf('`',i+1);if(e>i+1){int st=o.length();o.append(s.substring(i+1,e));o.setSpan(new TypefaceSpan(Typeface.MONOSPACE),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);o.setSpan(new BackgroundColorSpan(0xff1c1c21),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);i=e+1;continue;}}
-                if(s.charAt(i)=='*'||s.charAt(i)=='_'){char m=s.charAt(i);int e=s.indexOf(m,i+1);if(e>i+1){int st=o.length();o.append(s.substring(i+1,e));o.setSpan(new StyleSpan(Typeface.ITALIC),st,o.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);i=e+1;continue;}}
-                o.append(s.charAt(i++));
-              }
-            }
-          }
-          EOF
-
-          cat > android/app/src/main/java/dev/pocketpal/local/ThinkingParser.java <<'EOF'
-          package dev.pocketpal.local;
-          public final class ThinkingParser {
-           public static final class Parts{public final String thinking,answer;public final boolean active;Parts(String t,String a,boolean x){thinking=t;answer=a;active=x;}}
-           private ThinkingParser(){}
-           private static final String[][] TAGS={
-            {"<think>","</think>"},{"<thinking>","</thinking>"},
-            {"<|thinking|>","<|end_thinking|>"},
-            {"<|begin_of_thought|>","<|end_of_thought|>"},
-            {"<|begin_of_thinking|>","<|end_of_thinking|>"},
-            {"<｜begin▁of▁thinking｜>","<｜end▁of▁thinking｜>"},
-            {"<｜begin▁of▁thought｜>","<｜end▁of▁thought｜>"}
-           };
-           public static Parts split(String text){
-            if(text==null)text="";
-            int best=-1; String open=null,close=null;
-            for(String[] p:TAGS){int a=text.indexOf(p[0]);if(a>=0&&(best<0||a<best)){best=a;open=p[0];close=p[1];}}
-            if(best>=0){
-             int st=best+open.length(),b=text.indexOf(close,st);
-             if(b>=0)return new Parts(text.substring(st,b).trim(),text.substring(b+close.length()).trim(),false);
-             return new Parts(text.substring(st).trim(),"",true);
-            }
-            // DeepSeek-R1 templates often prefill <think> in the prompt,
-            // so the generated stream starts directly with reasoning and only
-            // emits the closing tag.
-            int end=-1; String endTag=null;
-            for(String[] p:TAGS){int b=text.indexOf(p[1]);if(b>=0&&(end<0||b<end)){end=b;endTag=p[1];}}
-            if(end>=0)return new Parts(text.substring(0,end).trim(),text.substring(end+endTag.length()).trim(),false);
-            return new Parts("",text,false);
-           }
-          }
-
-          EOF
-
-                    cat > android/app/src/main/java/dev/pocketpal/local/NativeBridge.java <<'EOF'
-          package dev.pocketpal.local;
-          public final class NativeBridge {
-           static{System.loadLibrary("pocketpal_local");}
-           private NativeBridge(){}
-           public static native boolean nativeLoad(String path,int nctx,int threads,int batchThreads,int batch,boolean flash,boolean mmap,boolean mlock);
-           public static native String nativeTemplate();
-           public static native void nativeStop();
-           public static native void nativeFree();
-           public static native void nativeSetLogPath(String path);
-           public static native boolean nativeGenerateChat(String[] roles,String[] contents,int maxTokens,float temperature,float topP,int topK,float minP,long seed,boolean useJinja,boolean enableThinking,String systemPrompt,TokenCallback callback);
-          }
-          interface TokenCallback{void emit(String text,boolean done);}
-
-          EOF
-
-          cat > android/app/src/main/java/dev/pocketpal/local/MainActivity.java <<'EOF'
-          package dev.pocketpal.local;
-
-          import android.app.Activity;
-          import android.app.AlertDialog;
-          import android.app.ActivityManager;
-          import android.app.ApplicationExitInfo;
-          import android.content.Intent;
-          import android.graphics.Color;
-          import android.graphics.Typeface;
-          import android.net.Uri;
-          import android.os.Bundle;
-          import android.os.Handler;
-          import android.os.Looper;
-          import android.provider.OpenableColumns;
-          import android.view.Gravity;
-          import android.view.View;
-          import android.view.Window;
-          import android.widget.Button;
-          import android.content.ClipData;
-          import android.content.ClipboardManager;
-          import android.widget.EditText;
-          import android.widget.LinearLayout;
-          import android.widget.ScrollView;
-          import android.widget.TextView;
-          import android.widget.Toast;
-
-          import java.io.File;
-          import java.io.FileOutputStream;
-          import java.io.FileInputStream;
-          import java.io.InputStream;
-          import java.io.OutputStream;
-          import java.nio.charset.StandardCharsets;
-
-          public class MainActivity extends Activity {
-              private static final int PICK_MODEL = 7001;
-              private static final int CREATE_LOG = 7002;
-
-              private final int BG = Color.rgb(9, 9, 11);
-              private final int PANEL = Color.rgb(18, 18, 21);
-              private final int PANEL_2 = Color.rgb(25, 25, 29);
-              private final int TEXT = Color.rgb(241, 241, 243);
-              private final int MUTED = Color.rgb(151, 151, 160);
-
-              private LinearLayout root;
-              private ScrollView chatScroll;
-              private TextView modelStatus, emptyTitle, emptyText, chat, thinking;
-              private Button modelButton;
-              private EditText input;
-              private boolean loaded = false, generating = false;
-              private File modelFile;
-              private File diagnosticFile;
-              private TextView copyButton, sendButton;
-                  private boolean followOutput=true, thinkingExpanded=true, thinkingWasActive=false;
-                  private String lastAnswer="", lastThinking="";
-                  private final StringBuilder generationRaw=new StringBuilder();
-                  private final Handler mainHandler=new Handler(Looper.getMainLooper());
-                  private boolean uiUpdatePosted=false;
-                  private boolean terminalPosted=false;
-
-              private int dp(float v) {
-                  return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
-              }
-
-              private TextView text(String value, float size, int color) {
-                  TextView t = new TextView(this);
-                  t.setText(value);
-                  t.setTextSize(size);
-                  t.setTextColor(color);
-                  t.setGravity(Gravity.CENTER_VERTICAL);
-                  return t;
-              }
-
-              private android.graphics.drawable.GradientDrawable bg(int color, float radius) {
-                  android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
-                  d.setColor(color);
-                  d.setCornerRadius(dp(radius));
-                  return d;
-              }
-
-              private Button button(String label) {
-                  Button b = new Button(this);
-                  b.setText(label);
-                  b.setTextSize(14);
-                  b.setTextColor(Color.rgb(15,15,17));
-                  b.setAllCaps(false);
-                  b.setBackground(bg(Color.rgb(232,232,236), 28));
-                  b.setPadding(dp(18), 0, dp(18), 0);
-                  return b;
-              }
-
-              private TextView iconButton(String symbol) {
-                  TextView b = text(symbol, 28, TEXT);
-                  b.setGravity(Gravity.CENTER);
-                  b.setPadding(dp(8), 0, dp(8), 0);
-                  return b;
-              }
-
-              @Override protected void onCreate(Bundle state) {
-                  super.onCreate(state);
-                  Window w = getWindow();
-                  w.setStatusBarColor(BG);
-                  w.setNavigationBarColor(BG);
-                  w.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-                  if (android.os.Build.VERSION.SDK_INT >= 29) {
-                      w.setNavigationBarContrastEnforced(false);
-                      w.setStatusBarContrastEnforced(false);
-                  }
-                  if (android.os.Build.VERSION.SDK_INT >= 30) {
-                      w.setDecorFitsSystemWindows(false);
-                  }
-                  initDiagnostics();
-                  buildUi();
-                  root.post(() -> applySystemBarInsets());
-              }
-
-              private void initDiagnostics() {
-                  try {
-                      File base = getExternalFilesDir(null);
-                      if (base == null) base = getFilesDir();
-                      File dir = new File(base, "logs");
-                      if (!dir.exists()) dir.mkdirs();
-                      diagnosticFile = new File(dir, "pocketpal_diagnostics.log");
-                      appendDiagnostic("=== SESSION START " + System.currentTimeMillis() + " ===");
-                      NativeBridge.nativeSetLogPath(diagnosticFile.getAbsolutePath());
-                      final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
-                      Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
-                          appendDiagnostic("JAVA_UNCAUGHT thread=" + thread.getName() + " " + android.util.Log.getStackTraceString(error));
-                          if (previous != null) previous.uncaughtException(thread, error);
-                      });
-                      if (android.os.Build.VERSION.SDK_INT >= 30) new Thread(this::inspectPreviousExit, "diagnostic-exit").start();
-                  } catch (Throwable t) { android.util.Log.e("PocketPalDiag", "init diagnostics", t); }
-              }
-
-              private synchronized void appendDiagnostic(String line) {
-                  try {
-                      if (diagnosticFile == null) return;
-                      File parent = diagnosticFile.getParentFile();
-                      if (parent != null && !parent.exists()) parent.mkdirs();
-                      try (FileOutputStream out = new FileOutputStream(diagnosticFile, true)) {
-                          out.write(("[" + System.currentTimeMillis() + "] " + line + "\n").getBytes(StandardCharsets.UTF_8));
-                          out.flush();
-                      }
-                  } catch (Throwable ignored) {}
-              }
-
-              private void inspectPreviousExit() {
-                  try {
-                      ActivityManager am = (ActivityManager)getSystemService(ACTIVITY_SERVICE);
-                      java.util.List<ApplicationExitInfo> exits = am.getHistoricalProcessExitReasons(getPackageName(), 0, 10);
-                      if (exits == null || exits.isEmpty()) return;
-                      ApplicationExitInfo info = exits.get(0);
-                      int reason = info.getReason();
-                      if (reason != ApplicationExitInfo.REASON_CRASH &&
-                          reason != ApplicationExitInfo.REASON_CRASH_NATIVE &&
-                          reason != ApplicationExitInfo.REASON_ANR) return;
-                      appendDiagnostic("PREVIOUS_EXIT reason=" + reasonName(reason) + " status=" + info.getStatus() +
-                              " importance=" + info.getImportance() + " description=" + String.valueOf(info.getDescription()));
-                      try (InputStream trace = info.getTraceInputStream()) {
-                          if (trace != null) {
-                              byte[] buf = new byte[8192]; int n, total = 0; StringBuilder dump = new StringBuilder();
-                              while (total < 1024 * 1024 && (n = trace.read(buf)) > 0) {
-                                  dump.append(new String(buf, 0, n, StandardCharsets.UTF_8)); total += n;
-                              }
-                              if (dump.length() > 0) appendDiagnostic("PREVIOUS_EXIT_TRACE\n" + dump);
-                          }
-                      } catch (Throwable t) { appendDiagnostic("PREVIOUS_EXIT_TRACE_ERROR " + android.util.Log.getStackTraceString(t)); }
-                  } catch (Throwable t) { appendDiagnostic("PREVIOUS_EXIT_INSPECT_ERROR " + android.util.Log.getStackTraceString(t)); }
-              }
-
-              private String reasonName(int reason) {
-                  switch (reason) {
-                      case ApplicationExitInfo.REASON_CRASH: return "JAVA_CRASH";
-                      case ApplicationExitInfo.REASON_CRASH_NATIVE: return "NATIVE_CRASH";
-                      case ApplicationExitInfo.REASON_ANR: return "ANR";
-                      default: return "OTHER_" + reason;
+      - name: Configure Capacitor Android project
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("android/app/build.gradle")
+          s=p.read_text()
+          block='''
+          android {
+              ndkVersion "27.2.12479018"
+              defaultConfig {
+                  ndk {
+                      abiFilters "arm64-v8a"
                   }
               }
-
-              private void exportDiagnosticLog() {
-                  if (diagnosticFile == null || !diagnosticFile.exists()) {
-                      Toast.makeText(this, "Diagnostic log ainda não existe.", Toast.LENGTH_SHORT).show(); return;
-                  }
-                  Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-                  i.addCategory(Intent.CATEGORY_OPENABLE);
-                  i.setType("text/plain");
-                  i.putExtra(Intent.EXTRA_TITLE, "pocketpal_diagnostics.txt");
-                  startActivityForResult(i, CREATE_LOG);
-              }
-
-              private void buildUi() {
-                  root = new LinearLayout(this);
-                  root.setOrientation(LinearLayout.VERTICAL);
-                  root.setBackgroundColor(BG);
-
-                  LinearLayout top = new LinearLayout(this);
-                  top.setGravity(Gravity.CENTER_VERTICAL);
-                  top.setPadding(dp(18), dp(8), dp(14), dp(8));
-
-                  top.addView(iconButton("☰"), new LinearLayout.LayoutParams(dp(48), dp(48)));
-                  TextView title = text("Chat", 25, TEXT);
-                  title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-                  top.addView(title, new LinearLayout.LayoutParams(0, dp(56), 1));
-
-                  TextView edit = iconButton("✎");
-                  edit.setOnClickListener(v -> newChat());
-                  top.addView(edit, new LinearLayout.LayoutParams(dp(52), dp(52)));
-
-                  TextView more = iconButton("⋮");
-                  more.setOnClickListener(v -> showSettings());
-                  top.addView(more, new LinearLayout.LayoutParams(dp(44), dp(52)));
-                  root.addView(top, new LinearLayout.LayoutParams(-1, dp(70)));
-
-                  LinearLayout body = new LinearLayout(this);
-                  body.setOrientation(LinearLayout.VERTICAL);
-                  body.setGravity(Gravity.CENTER);
-                  body.setPadding(dp(22), 0, dp(22), 0);
-
-                  emptyTitle = text("Activate Model To Get Started", 24, TEXT);
-                  emptyTitle.setGravity(Gravity.CENTER);
-                  body.addView(emptyTitle, new LinearLayout.LayoutParams(-1, dp(42)));
-
-                  emptyText = text("Select the model and load it. After loading, start chatting with your local model.", 17, MUTED);
-                  emptyText.setGravity(Gravity.CENTER);
-                  emptyText.setLineSpacing(0, 1.12f);
-                  LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, dp(100));
-                  ep.topMargin = dp(8);
-                  body.addView(emptyText, ep);
-
-                  modelButton = button("Select Model");
-                  modelButton.setOnClickListener(v -> pickModel());
-                  LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(280), dp(58));
-                  bp.gravity = Gravity.CENTER;
-                  bp.topMargin = dp(16);
-                  body.addView(modelButton, bp);
-
-                  thinking = text("", 14, MUTED);
-                  thinking.setGravity(Gravity.TOP | Gravity.START);
-                  thinking.setPadding(dp(14), dp(10), dp(14), dp(10));
-                  thinking.setBackground(bg(PANEL_2, 16));
-                  thinking.setTextIsSelectable(true);
-                  thinking.setVisibility(View.GONE);
-                  thinking.setOnClickListener(v -> { thinkingExpanded=!thinkingExpanded; renderThinking(lastThinking,thinkingExpanded); });
-                  body.addView(thinking, new LinearLayout.LayoutParams(-1, -2));
-
-                  chat = text("", 16, TEXT);
-                  chat.setGravity(Gravity.TOP | Gravity.START);
-                  chat.setTextIsSelectable(true);
-                  chat.setLineSpacing(0, 1.08f);
-                  chatScroll = new ScrollView(this);
-                  chatScroll.setFillViewport(true);
-                  chatScroll.addView(chat, new ScrollView.LayoutParams(-1, -2));
-                  chatScroll.setVisibility(View.GONE);
-                  chatScroll.setOnScrollChangeListener((v,scrollX,scrollY,oldScrollX,oldScrollY) -> {
-                      if(chatScroll.getChildCount()==0)return;
-                      int diff=chatScroll.getChildAt(0).getBottom()-(chatScroll.getHeight()+scrollY);
-                      followOutput=diff<dp(96);
-                  });
-                  body.addView(chatScroll, new LinearLayout.LayoutParams(-1, 0, 1));
-                  copyButton=text("Copy response",14,TEXT); copyButton.setGravity(Gravity.CENTER); copyButton.setBackground(bg(PANEL_2,18)); copyButton.setVisibility(View.GONE);
-                  copyButton.setOnClickListener(v -> { ClipboardManager cm=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE); cm.setPrimaryClip(ClipData.newPlainText("assistant",lastAnswer)); Toast.makeText(this,"Response copied",Toast.LENGTH_SHORT).show(); });
-                  LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,dp(42)); cp.topMargin=dp(8); body.addView(copyButton,cp);
-                  root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
-
-                  LinearLayout composer = new LinearLayout(this);
-                  composer.setOrientation(LinearLayout.VERTICAL);
-                  composer.setPadding(dp(14), dp(12), dp(14), dp(16));
-                  composer.setBackground(bg(PANEL, 26));
-
-                  input = new EditText(this);
-                  input.setHint("Type a message...");
-                  input.setHintTextColor(Color.rgb(105,105,114));
-                  input.setTextColor(TEXT);
-                  input.setTextSize(17);
-                  input.setSingleLine(false);
-                  input.setMinLines(2);
-                  input.setMaxLines(5);
-                  input.setGravity(Gravity.TOP | Gravity.START);
-                  input.setBackgroundColor(Color.TRANSPARENT);
-                  composer.addView(input, new LinearLayout.LayoutParams(-1, dp(70)));
-
-                  LinearLayout actions = new LinearLayout(this);
-                  actions.setGravity(Gravity.CENTER_VERTICAL);
-
-                  TextView plus = text("+", 30, TEXT);
-                  plus.setGravity(Gravity.CENTER);
-                  actions.addView(plus, new LinearLayout.LayoutParams(dp(48), dp(42)));
-
-                  TextView up = text("⌃", 25, TEXT);
-                  up.setGravity(Gravity.CENTER);
-                  up.setBackground(bg(PANEL_2, 24));
-                  LinearLayout.LayoutParams upLp = new LinearLayout.LayoutParams(dp(48), dp(42));
-                  upLp.leftMargin = dp(4);
-                  actions.addView(up, upLp);
-
-                  modelStatus = text("Model not loaded", 12, MUTED);
-                  LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, dp(42), 1);
-                  sp.leftMargin = dp(10);
-                  actions.addView(modelStatus, sp);
-
-                  sendButton = text("➤", 30, TEXT);
-                  sendButton.setGravity(Gravity.CENTER);
-                  sendButton.setOnClickListener(v -> { if(generating) stopGeneration(); else sendMessage(); });
-                  actions.addView(sendButton, new LinearLayout.LayoutParams(dp(52), dp(42)));
-
-                  composer.addView(actions);
-                  root.addView(composer, new LinearLayout.LayoutParams(-1, dp(156)));
-
-                  setContentView(root);
-                  applySystemBarInsets();
-              }
-
-              private void applySystemBarInsets() {
-                  if (root == null) return;
-                  root.setOnApplyWindowInsetsListener((v, insets) -> {
-                      int t = android.view.WindowInsets.Type.systemBars();
-                      android.graphics.Insets bars = insets.getInsets(t);
-                      int bottom = bars.bottom;
-                      if (android.os.Build.VERSION.SDK_INT >= 30) {
-                          android.graphics.Insets ime = insets.getInsets(android.view.WindowInsets.Type.ime());
-                          bottom = Math.max(bottom, ime.bottom);
-                      }
-                      v.setPadding(v.getPaddingLeft(), bars.top, v.getPaddingRight(), bottom);
-                      return insets;
-                  });
-                  root.requestApplyInsets();
-              }
-
-              private void pickModel() {
-                  Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                  i.addCategory(Intent.CATEGORY_OPENABLE);
-                  i.setType("*/*");
-                  startActivityForResult(i, PICK_MODEL);
-              }
-
-              @Override protected void onActivityResult(int request, int result, Intent data) {
-                  super.onActivityResult(request, result, data);
-                  if (request == CREATE_LOG) {
-                      if (result != RESULT_OK || data == null || data.getData() == null) return;
-                      Uri uri = data.getData();
-                      new Thread(() -> {
-                          try (InputStream in = new FileInputStream(diagnosticFile);
-                               OutputStream out = getContentResolver().openOutputStream(uri)) {
-                              if (out == null) throw new IllegalStateException("Não foi possível abrir o destino.");
-                              byte[] buf = new byte[8192]; int n;
-                              while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                              runOnUiThread(() -> Toast.makeText(this, "Log exportado.", Toast.LENGTH_SHORT).show());
-                          } catch (Exception e) {
-                              runOnUiThread(() -> Toast.makeText(this, "Exportação falhou: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                          }
-                      }, "diagnostic-export").start();
-                      return;
-                  }
-                  if (request != PICK_MODEL || result != RESULT_OK || data == null || data.getData() == null) return;
-                  Uri uri = data.getData();
-                  new Thread(() -> {
-                      try {
-                          File dir = new File(getFilesDir(), "models");
-                          if (!dir.exists()) dir.mkdirs();
-                          String name = queryName(uri);
-                          if (name == null || name.isEmpty()) name = "model.gguf";
-                          name = name.replaceAll("[^A-Za-z0-9._-]", "_");
-                          modelFile = new File(dir, name);
-                          try (InputStream in = getContentResolver().openInputStream(uri);
-                               FileOutputStream out = new FileOutputStream(modelFile)) {
-                              if (in == null) throw new IllegalStateException("Não foi possível abrir o modelo");
-                              byte[] buf = new byte[1024 * 1024];
-                              int n;
-                              while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                          }
-                          runOnUiThread(this::loadModel);
-                      } catch (Exception e) {
-                          runOnUiThread(() -> Toast.makeText(this, "Importação falhou: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                      }
-                  }).start();
-              }
-
-              private String queryName(Uri uri) {
-                  try (android.database.Cursor c = getContentResolver().query(uri, null, null, null, null)) {
-                      if (c != null) {
-                          int idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                          if (idx >= 0 && c.moveToFirst()) return c.getString(idx);
-                      }
-                  } catch (Exception ignored) {}
-                  return uri.getLastPathSegment();
-              }
-
-              private void loadModel() {
-                  if (modelFile == null) return;
-                  modelButton.setText("Loading model…");
-                  modelButton.setEnabled(false);
-                  modelStatus.setText("Loading " + modelFile.getName() + "…");
-                  new Thread(() -> {
-                      boolean ok = NativeBridge.nativeLoad(
-                              modelFile.getAbsolutePath(), 8192, 4, 8, 512,
-                              true, true, false);
-                      runOnUiThread(() -> {
-                          loaded = ok;
-                          modelButton.setEnabled(true);
-                          modelButton.setText(ok ? "Model Loaded" : "Select Model");
-                          modelStatus.setText(ok ? modelFile.getName() : "Model load failed");
-                          emptyTitle.setText(ok ? "Ready" : "Activate Model To Get Started");
-                          emptyText.setText(ok ? "Your model is loaded locally. Type a message below." : "Select the model and load it. After loading, start chatting with your local model.");
-                      });
-                  }, "model-loader").start();
-              }
-
-              private void sendMessage() {
-                  appendDiagnostic("JAVA_SEND_MESSAGE loaded=" + loaded + " generating=" + generating);
-                  if(!loaded)return; String prompt=input.getText().toString().trim(); if(prompt.isEmpty()||generating)return;
-                  input.setText(""); generating=true; followOutput=true; thinkingExpanded=true; thinkingWasActive=false; lastAnswer=""; lastThinking=""; generationRaw.setLength(0);
-                  uiUpdatePosted=false; terminalPosted=false; if(sendButton!=null)sendButton.setText("■");
-                  chatScroll.setVisibility(View.VISIBLE); copyButton.setVisibility(View.GONE); emptyTitle.setVisibility(View.GONE); emptyText.setVisibility(View.GONE); modelButton.setVisibility(View.GONE);
-                  final String header=chat.getText().toString().isEmpty()?"":chat.getText().toString()+"\n\n"; chat.setText(header+"You\n"+prompt+"\n\nAssistant\n");
-                  String[] roles=new String[]{"user"}; String[] contents=new String[]{prompt};
-                  new Thread(() -> {
-                      appendDiagnostic("JAVA nativeGenerateChat ENTER");
-                      android.util.Log.e("PocketPalNative","Java: nativeGenerateChat ENTER");
-                      boolean ok=NativeBridge.nativeGenerateChat(roles,contents,maxTokens,temperature,topP,topK,minP,seed,useJinja,enableThinking,systemPrompt,(piece,done) -> {
-                          if(piece!=null&&!piece.isEmpty()) synchronized(generationRaw){generationRaw.append(piece);}
-                          if(!uiUpdatePosted){
-                              uiUpdatePosted=true;
-                              mainHandler.postDelayed(() -> {
-                                  uiUpdatePosted=false;
-                                  if(!terminalPosted) renderGenerationSnapshot(header,prompt,false);
-                              },50);
-                          }
-                      });
-                      appendDiagnostic("JAVA nativeGenerateChat RETURN ok=" + ok);
-                      android.util.Log.e("PocketPalNative","Java: nativeGenerateChat RETURN ok="+ok);
-                      mainHandler.post(() -> {
-                          if(terminalPosted)return;
-                          terminalPosted=true;
-                          finalizeGeneration(header,prompt);
-                          if(!ok && generationRaw.length()==0)chat.append("\n[Native inference error]");
-                      });
-                  },"llama-generate").start();
-              }
-              private void renderGenerationSnapshot(String header,String prompt,boolean finalFrame){
-                  try{
-                      String raw;
-                      synchronized(generationRaw){raw=generationRaw.toString();}
-                      ThinkingParser.Parts parts=ThinkingParser.split(raw);
-                      lastThinking=parts.thinking;
-                      if(parts.active){
-                          thinkingWasActive=true;
-                          thinking.setVisibility(View.VISIBLE);
-                          // Keep thinking plain while streaming. Markdown is only parsed after
-                          // generation is fully finished, avoiding span/layout churn.
-                          thinking.setText("🧠  Thinking\n\n"+lastThinking);
-                      }else if(thinkingWasActive && !lastThinking.trim().isEmpty()){
-                          // The closing </think> arrived: collapse immediately, without waiting
-                          // for nativeGenerateChat() to return.
-                          thinkingWasActive=false;
-                          thinkingExpanded=false;
-                          thinking.setVisibility(View.VISIBLE);
-                          thinking.setText("Thinking  >");
-                      }else if(lastThinking.trim().isEmpty()){
-                          thinking.setVisibility(View.GONE);
-                      }
-                      chat.setText(header+"You\n"+prompt+"\n\nAssistant\n"+parts.answer);
-                      if(followOutput)chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
-                  }catch(Throwable ui){
-                      android.util.Log.e("PocketPalUI","stream render",ui);
+              externalNativeBuild {
+                  cmake {
+                      path file("src/main/cpp/CMakeLists.txt")
+                      version "3.31.6"
                   }
               }
-              private void finalizeGeneration(String header,String prompt){
-                  // Terminal path is intentionally minimal. Natural EOG and manual STOP
-                  // both end here without re-parsing or re-rendering the final transcript.
-                  try{
-                      if(thinkingWasActive && !lastThinking.trim().isEmpty()){
-                          thinkingWasActive=false;
-                          thinkingExpanded=false;
-                          thinking.setVisibility(View.VISIBLE);
-                          thinking.setText("Thinking  >");
-                      }
-                      copyButton.setVisibility(lastAnswer.trim().isEmpty()?View.GONE:View.VISIBLE);
-                  }catch(Throwable ui){ android.util.Log.e("PocketPalUI","terminal ui",ui); }
-                  generating=false;
-                  if(sendButton!=null)sendButton.setText("➤");
-              }
-              private void stopGeneration(){appendDiagnostic("JAVA STOP pressed");if(generating)NativeBridge.nativeStop();}
-              private void renderThinking(String value,boolean expanded){if(value==null||value.trim().isEmpty()){thinking.setVisibility(View.GONE);return;}thinking.setVisibility(View.VISIBLE);if(expanded){SpannableStringBuilder b=new SpannableStringBuilder("🧠  Thinking\n\n");b.append(MarkdownRenderer.render(value));thinking.setText(b);}else thinking.setText("Thinking  >");}
-              private boolean shouldAutoScroll() { return followOutput; }
-
-              private void newChat() {
-                  if(generating)NativeBridge.nativeStop(); generating=false; if(sendButton!=null)sendButton.setText("➤");
-                  chat.setText(""); thinking.setText(""); thinking.setVisibility(View.GONE); thinkingWasActive=false; copyButton.setVisibility(View.GONE); generationRaw.setLength(0); lastAnswer=""; lastThinking="";
-                  input.setText("");
-                  chatScroll.setVisibility(View.GONE);
-                  emptyTitle.setVisibility(View.VISIBLE);
-                  emptyText.setVisibility(View.VISIBLE);
-                  modelButton.setVisibility(View.VISIBLE);
-                  emptyTitle.setText(loaded ? "Ready" : "Activate Model To Get Started");
-                  emptyText.setText(loaded ? "Your model is loaded locally. Type a message below." : "Select the model and load it. After loading, start chatting with your local model.");
-              }
-
-              private void showSettings() {
-                  LinearLayout box = new LinearLayout(this);
-                  box.setOrientation(LinearLayout.VERTICAL);
-                  box.setPadding(dp(20), dp(8), dp(20), dp(8));
-
-                  EditText ctx = new EditText(this);
-                  ctx.setHint("Context (default 8192)");
-                  ctx.setInputType(2);
-                  box.addView(ctx);
-
-                  EditText threads = new EditText(this);
-                  threads.setHint("CPU threads (default 6)");
-                  threads.setInputType(2);
-                  box.addView(threads);
-
-                  EditText tokens = new EditText(this);
-                  tokens.setHint("Max output tokens (default 1024)");
-                  tokens.setInputType(2);
-                  box.addView(tokens);
-
-                  new AlertDialog.Builder(this)
-                          .setTitle("Local model settings")
-                          .setView(box)
-                          .setPositiveButton("Apply", (d, which) -> Toast.makeText(this, "Settings UI pronta; controles avançados entram na próxima etapa.", Toast.LENGTH_SHORT).show())
-                          .setNegativeButton("Cancel", null)
-                          .show();
-              }
-
-              @Override protected void onDestroy() {
-                  appendDiagnostic("=== SESSION DESTROY ===");
-                  super.onDestroy();
-                  if (generating) NativeBridge.nativeStop();
-                  mainHandler.removeCallbacksAndMessages(null);
-                  NativeBridge.nativeFree();
+              packagingOptions {
+                  jniLibs {
+                      useLegacyPackaging true
+                  }
               }
           }
-          EOF
+          '''
+          s += "\n" + block
+          p.write_text(s)
+          PY
+          sed -i 's/android:label="[^"]*"/android:label="PocketPal Local"/' android/app/src/main/AndroidManifest.xml || true
 
-          mkdir -p android/app/src/main/res/drawable
-          cp "$GITHUB_WORKSPACE/native/android/MainActivity.java" android/app/src/main/java/dev/pocketpal/local/MainActivity.java
-          cp "$GITHUB_WORKSPACE/native/android/icons/"*.xml android/app/src/main/res/drawable/
-
-          cat > android/app/src/main/cpp/LlamaEngine.cpp <<'EOF'
-          #include <jni.h>
-          #include <android/log.h>
-          #include <atomic>
-          #include <mutex>
-          #include <string>
-          #include <vector>
-          #include <algorithm>
-          #include <fstream>
-          #include <ctime>
-          #include <cstdint>
-          #include "llama.h"
-          #include "common.h"
-          #include "chat.h"
-          #include "sampling.h"
-          #define TAG "PocketPalNative"
-          #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR,TAG,__VA_ARGS__)
-          static llama_model*g_model=nullptr;static llama_context*g_ctx=nullptr;static common_chat_templates_ptr g_chat_templates=nullptr;static std::mutex g_mutex;static std::atomic<bool> g_stop{false};
-          static std::mutex g_log_mutex;static std::string g_log_path;
-          static void DLOG(const std::string&s){LOGE("%s",s.c_str());std::lock_guard<std::mutex>lk(g_log_mutex);if(g_log_path.empty())return;std::ofstream f(g_log_path,std::ios::app);if(f)f<<"["<<std::time(nullptr)<<"] "<<s<<"\n";}
-          static std::string js(JNIEnv*e,jstring s){if(!s)return"";const char*p=e->GetStringUTFChars(s,nullptr);std::string r=p?p:"";if(p)e->ReleaseStringUTFChars(s,p);return r;}
-          static bool emit(JNIEnv*e,jobject cb,jmethodID mid,const std::string&s,std::string&pending){
-            pending+=s;std::u16string out;size_t i=0;
-            while(i<pending.size()){
-              const unsigned char c=(unsigned char)pending[i];uint32_t cp=0;int n=0;
-              if(c<0x80){cp=c;n=1;}
-              else if((c&0xE0)==0xC0){if(i+1>=pending.size())break;cp=c&0x1F;n=2;}
-              else if((c&0xF0)==0xE0){if(i+2>=pending.size())break;cp=c&0x0F;n=3;}
-              else if((c&0xF8)==0xF0){if(i+3>=pending.size())break;cp=c&0x07;n=4;}
-              else{cp=0xFFFD;n=1;}
-              if(n>1){
-                bool bad=false;for(int k=1;k<n;k++){unsigned char d=(unsigned char)pending[i+k];if((d&0xC0)!=0x80){bad=true;break;}cp=(cp<<6)|(d&0x3F);}
-                if(bad){cp=0xFFFD;n=1;}
-                else if((n==2&&cp<0x80)||(n==3&&cp<0x800)||(n==4&&cp<0x10000)||cp>0x10FFFF||(cp>=0xD800&&cp<=0xDFFF)){cp=0xFFFD;n=1;}
-              }
-              if(cp<=0xFFFF)out.push_back((char16_t)cp);
-              else{cp-=0x10000;out.push_back((char16_t)(0xD800+(cp>>10)));out.push_back((char16_t)(0xDC00+(cp&0x3FF)));}
-              i+=n;
-            }
-            if(i)pending.erase(0,i);
-            if(out.empty())return true;
-            jstring x=e->NewString(reinterpret_cast<const jchar*>(out.data()),(jsize)out.size());if(!x)return false;
-            e->CallVoidMethod(cb,mid,x,JNI_FALSE);e->DeleteLocalRef(x);
-            if(e->ExceptionCheck()){LOGE("JNI token callback exception");e->ExceptionDescribe();e->ExceptionClear();return false;}return true;
-          }
-          static bool flushUtf8(JNIEnv*e,jobject cb,jmethodID mid,std::string&pending){
-            if(pending.empty())return true;std::u16string out;out.push_back((char16_t)0xFFFD);pending.clear();
-            jstring x=e->NewString(reinterpret_cast<const jchar*>(out.data()),1);if(!x)return false;
-            e->CallVoidMethod(cb,mid,x,JNI_FALSE);e->DeleteLocalRef(x);
-            if(e->ExceptionCheck()){LOGE("JNI final UTF-8 callback exception");e->ExceptionDescribe();e->ExceptionClear();return false;}return true;
-          }
-          extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeSetLogPath(JNIEnv*e,jclass,jstring path){std::lock_guard<std::mutex>lk(g_log_mutex);g_log_path=js(e,path);if(!g_log_path.empty()){std::ofstream f(g_log_path,std::ios::app);if(f)f<<"["<<std::time(nullptr)<<"] NATIVE LOG INITIALIZED\n";}}
-          extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeLoad(JNIEnv*e,jclass,jstring path,jint nctx,jint threads,jint bt,jint batch,jboolean flash,jboolean mmap,jboolean mlock){
-           std::lock_guard<std::mutex>lk(g_mutex);DLOG("nativeLoad ENTER");g_stop=false;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}g_chat_templates.reset();if(g_model){llama_model_free(g_model);g_model=nullptr;}llama_backend_init();DLOG("nativeLoad backend initialized");
-           llama_model_params mp=llama_model_default_params();mp.n_gpu_layers=0;mp.load_mode=mmap?(mlock?LLAMA_LOAD_MODE_MMAP_MLOCK:LLAMA_LOAD_MODE_MMAP):(mlock?LLAMA_LOAD_MODE_MLOCK:LLAMA_LOAD_MODE_NONE);std::string p=js(e,path);g_model=llama_model_load_from_file(p.c_str(),mp);
-           if(!g_model&&mlock){mp.load_mode=mmap?LLAMA_LOAD_MODE_MMAP:LLAMA_LOAD_MODE_NONE;g_model=llama_model_load_from_file(p.c_str(),mp);}if(!g_model){DLOG("nativeLoad model load FAILED");return JNI_FALSE;}
-           llama_context_params cp=llama_context_default_params();cp.n_ctx=(uint32_t)std::max(512,(int)nctx);cp.n_batch=(uint32_t)std::max(32,(int)batch);cp.n_ubatch=std::min(cp.n_batch,512u);cp.n_threads=std::max(1,(int)threads);cp.n_threads_batch=std::max(1,(int)bt);cp.flash_attn_type=flash?LLAMA_FLASH_ATTN_TYPE_ENABLED:LLAMA_FLASH_ATTN_TYPE_DISABLED;cp.offload_kqv=false;g_ctx=llama_init_from_model(g_model,cp);
-           if(!g_ctx){DLOG("nativeLoad context init FAILED");llama_model_free(g_model);g_model=nullptr;return JNI_FALSE;}try{g_chat_templates=common_chat_templates_init(g_model,"");}catch(const std::exception&x){LOGE("chat template init failed: %s",x.what());llama_free(g_ctx);g_ctx=nullptr;llama_model_free(g_model);g_model=nullptr;return JNI_FALSE;}DLOG("nativeLoad SUCCESS");
-           return JNI_TRUE;
-          }
-          extern "C" JNIEXPORT jstring JNICALL Java_dev_pocketpal_local_NativeBridge_nativeTemplate(JNIEnv*e,jclass){std::lock_guard<std::mutex>lk(g_mutex);const char*t=g_model?llama_model_chat_template(g_model,nullptr):nullptr;return e->NewStringUTF(t?t:"");}
-          extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeStop(JNIEnv*,jclass){DLOG("nativeStop");g_stop=true;}
-          extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeFree(JNIEnv*,jclass){DLOG("nativeFree ENTER");std::lock_guard<std::mutex>lk(g_mutex);g_stop=true;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}g_chat_templates.reset();if(g_model){llama_model_free(g_model);g_model=nullptr;}}
-          extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeGenerateChat(JNIEnv*e,jclass,jobjectArray jr,jobjectArray jc,jint maxTok,jfloat temp,jfloat topP,jint topK,jfloat minP,jlong seed,jboolean useJinja,jboolean enableThinking,jstring jsystem,jobject cb){
-           std::lock_guard<std::mutex>lk(g_mutex);DLOG("nativeGenerateChat ENTER");if(!g_model||!g_ctx||!cb){DLOG("nativeGenerateChat invalid state");return JNI_FALSE;}g_stop=false;jclass cls=e->GetObjectClass(cb);jmethodID mid=e->GetMethodID(cls,"emit","(Ljava/lang/String;Z)V");if(!mid){e->DeleteLocalRef(cls);return JNI_FALSE;}
-           try{
-            std::vector<common_chat_msg>msgs;std::string sys=js(e,jsystem);if(!sys.empty()){common_chat_msg m;m.role="system";m.content=sys;msgs.push_back(m);}jsize n=e->GetArrayLength(jr);
-            for(jsize i=0;i<n;i++){jstring r=(jstring)e->GetObjectArrayElement(jr,i),c=(jstring)e->GetObjectArrayElement(jc,i);common_chat_msg m;m.role=js(e,r);m.content=js(e,c);msgs.push_back(m);e->DeleteLocalRef(r);e->DeleteLocalRef(c);}
-            common_chat_templates_inputs in;in.messages=msgs;in.add_generation_prompt=true;in.use_jinja=useJinja;in.enable_thinking=enableThinking;in.reasoning_format=COMMON_REASONING_FORMAT_DEEPSEEK;
-            common_chat_params formatted=common_chat_templates_apply(g_chat_templates.get(),in);if(formatted.prompt.empty())return JNI_FALSE;const llama_vocab*v=llama_model_get_vocab(g_model);std::vector<llama_token>toks=common_tokenize(v,formatted.prompt,true,true);if(toks.empty())return JNI_FALSE;if((int)toks.size()+2>=(int)llama_n_ctx(g_ctx))return JNI_FALSE;
-            llama_memory_t mem=llama_get_memory(g_ctx);if(mem)llama_memory_clear(mem,true);
-            common_params_sampling sp;sp.seed=seed<0?LLAMA_DEFAULT_SEED:(uint32_t)seed;sp.temp=std::max(0.0f,(float)temp);sp.top_p=std::clamp((float)topP,0.0f,1.0f);sp.top_k=std::max(0,(int)topK);sp.min_p=std::clamp((float)minP,0.0f,1.0f);sp.samplers={COMMON_SAMPLER_TYPE_TOP_K,COMMON_SAMPLER_TYPE_TOP_P,COMMON_SAMPLER_TYPE_MIN_P,COMMON_SAMPLER_TYPE_TEMPERATURE};common_sampler*smp=common_sampler_init(g_model,sp);if(!smp)return JNI_FALSE;
-            llama_batch b=llama_batch_init((int32_t)std::min((size_t)llama_n_batch(g_ctx),toks.size()),0,1);int pos=0;bool ok=true;
-            for(size_t off=0;off<toks.size()&&!g_stop;){common_batch_clear(b);int take=(int)std::min((size_t)llama_n_batch(g_ctx),toks.size()-off);for(int i=0;i<take;i++)common_batch_add(b,toks[off+i],pos++,{0},off+i+1==toks.size());if(llama_decode(g_ctx,b)!=0){ok=false;break;}off+=take;}
-            if(!ok){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}
-            if(g_stop){llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;}
-            enum class EndReason { EOG, STOP, LIMIT, CALLBACK, DECODE_ERROR };
-            EndReason reason=EndReason::LIMIT;std::string utf8Pending;
-            for(int step=0;step<std::max(1,(int)maxTok);step++){
-              if(g_stop){reason=EndReason::STOP;break;}
-              llama_token tok=common_sampler_sample(smp,g_ctx,-1);
-              if(llama_vocab_is_eog(v,tok)){
-                DLOG(std::string("generation: EOG token=")+std::to_string((int)tok));
-                reason=EndReason::EOG;
-                g_stop=true;
-                break;
-              }
-              common_sampler_accept(smp,tok,true);
-              std::string piece=common_token_to_piece(v,tok,true);
-              if(!piece.empty()&&!emit(e,cb,mid,piece,utf8Pending)){reason=EndReason::CALLBACK;break;}
-              common_batch_clear(b);
-              common_batch_add(b,tok,pos++,{0},true);
-              if(llama_decode(g_ctx,b)!=0){reason=EndReason::DECODE_ERROR;break;}
-            }
-            if(!utf8Pending.empty()&&!flushUtf8(e,cb,mid,utf8Pending)){reason=EndReason::CALLBACK;}
-            DLOG(std::string("generation: terminal cleanup begin reason=")+
-                 (reason==EndReason::EOG?"EOG":
-                  reason==EndReason::STOP?"STOP":
-                  reason==EndReason::LIMIT?"LIMIT":
-                  reason==EndReason::CALLBACK?"CALLBACK":"DECODE_ERROR"));
-            DLOG("generation: before batch_free");
-            llama_batch_free(b);
-            DLOG("generation: after batch_free");
-            DLOG("generation: before sampler_free");
-            common_sampler_free(smp);
-            DLOG("generation: after sampler_free");
-            DLOG("generation: before DeleteLocalRef");
-            e->DeleteLocalRef(cls);
-            DLOG("generation: after DeleteLocalRef");
-            g_stop=false;
-            DLOG("generation: returning JNI_TRUE");
-            return reason==EndReason::DECODE_ERROR?JNI_FALSE:JNI_TRUE;
-           }catch(const std::exception&x){DLOG(std::string("generation EXCEPTION: ")+x.what());return JNI_FALSE;}catch(...){DLOG("generation UNKNOWN EXCEPTION");return JNI_FALSE;}
-          }
-
-          EOF
-
-          mkdir -p android/app/src/main/res/drawable
-          cp "$GITHUB_WORKSPACE/native/android/MainActivity.java" android/app/src/main/java/dev/pocketpal/local/MainActivity.java
-          cp "$GITHUB_WORKSPACE/native/android/icons/"*.xml android/app/src/main/res/drawable/
-
-          cat > android/README.md <<'EOF'
-          # PocketPal Local — Native Android
-
-          Native Android UI + C++ llama.cpp engine. No Capacitor, no WebView, no React runtime.
-
-          The interface is an original dark chat layout inspired by the provided visual reference, without the reference app's mascot/icon.
-          EOF
+      - name: Sync Capacitor
+        run: npx cap sync android
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
 
-      - name: Build native APK
-        working-directory: ${{ env.PROJECT_DIR }}/android
+      - name: Build APK
+        working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pocketpal-local-native-debug-apk
-          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
+          name: pocketpal-capacitor-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
