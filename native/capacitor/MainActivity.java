@@ -19,9 +19,12 @@ public class MainActivity extends BridgeActivity {
       if(Diagnostic.getFile()!=null) NativeBridge.nativeSetLogPath(Diagnostic.getFile().getAbsolutePath());
     }catch(Throwable x){Diagnostic.log("BOOT native log setup "+android.util.Log.getStackTraceString(x));}
 
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-    getWindow().setStatusBarColor(Color.TRANSPARENT);
-    getWindow().setNavigationBarColor(Color.TRANSPARENT);
+    // Let Android reserve the status/navigation bar insets for the WebView.
+    // The web UI uses fixed headers/drawers/composer, so edge-to-edge here would
+    // make those elements render underneath the phone system bars.
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
+    getWindow().setStatusBarColor(Color.rgb(8,10,18));
+    getWindow().setNavigationBarColor(Color.rgb(8,10,18));
     WindowInsetsControllerCompat insets = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
     insets.setAppearanceLightStatusBars(false);
     insets.setAppearanceLightNavigationBars(false);
