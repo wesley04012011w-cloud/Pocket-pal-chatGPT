@@ -13,7 +13,7 @@ public class MainActivity extends BridgeActivity {
     super.onCreate(state);
     Diagnostic.log("BOOT Capacitor Bridge ready");
   }
-  @Override protected void onDestroy(){
+  @Override public void onDestroy(){
     Diagnostic.log("=== SESSION DESTROY ===");
     try{NativeBridge.nativeFree();}catch(Throwable x){Diagnostic.log("nativeFree "+android.util.Log.getStackTraceString(x));}
     super.onDestroy();
