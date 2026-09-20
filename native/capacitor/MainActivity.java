@@ -9,6 +9,10 @@ import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
   @Override public void onCreate(Bundle state){
+    // Force the no-action-bar theme before BridgeActivity creates the WebView.
+    // This prevents the generated Capacitor launch theme from leaving a
+    // native white title bar above the dark web UI.
+    setTheme(R.style.AppTheme_NoActionBar);
     Diagnostic.init(this);
     Diagnostic.log("BOOT MainActivity.onCreate");
     try{
