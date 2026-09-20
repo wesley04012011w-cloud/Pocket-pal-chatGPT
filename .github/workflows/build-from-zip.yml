@@ -143,6 +143,7 @@ jobs:
           p.write_text(s)
           PY
           sed -i 's/android:label="[^"]*"/android:label="PocketPal Local"/' android/app/src/main/AndroidManifest.xml || true
+          grep -q 'android.permission.INTERNET' android/app/src/main/AndroidManifest.xml || sed -i '/<manifest /a\    <uses-permission android:name="android.permission.INTERNET"/>' android/app/src/main/AndroidManifest.xml
 
       - name: Sync Capacitor
         run: npx cap sync android
