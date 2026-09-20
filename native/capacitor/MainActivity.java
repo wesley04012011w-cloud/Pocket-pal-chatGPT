@@ -19,12 +19,19 @@ public class MainActivity extends BridgeActivity {
       if(Diagnostic.getFile()!=null) NativeBridge.nativeSetLogPath(Diagnostic.getFile().getAbsolutePath());
     }catch(Throwable x){Diagnostic.log("BOOT native log setup "+android.util.Log.getStackTraceString(x));}
 
-    // Let Android reserve the status/navigation bar insets for the WebView.
-    // The web UI uses fixed headers/drawers/composer, so edge-to-edge here would
-    // make those elements render underneath the phone system bars.
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
-    getWindow().setStatusBarColor(Color.rgb(8,10,18));
-    getWindow().setNavigationBarColor(Color.rgb(8,10,18));
+    // Immersive fullscreen: the chat owns the entire display. The floating web
+    // controls are intentionally positioned inside this fullscreen canvas.
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    getWindow().setStatusBarColor(Color.TRANSPARENT);
+    getWindow().setNavigationBarColor(Color.TRANSPARENT);
+    getWindow().getDecorView().setSystemUiVisibility(
+      android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+      | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+      | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+      | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+      | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+      | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+    );
     WindowInsetsControllerCompat insets = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
     insets.setAppearanceLightStatusBars(false);
     insets.setAppearanceLightNavigationBars(false);
