@@ -53,7 +53,7 @@ public class LlamaPlugin extends Plugin {
       File[] files=dir.listFiles();
       if(files!=null) for(File f:files){
         if(!f.isFile()||!f.getName().toLowerCase().endsWith(".gguf")) continue;
-        JSObject m=new JSObject();m.put("name",f.getName());m.put("path",f.getAbsolutePath());m.put("bytes",f.length());arr.put(m);
+        JSObject m=new JSObject();m.put("name",f.getName());m.put("path",f.getAbsolutePath());m.put("bytes",String.valueOf(f.length()));arr.put(m);
       }
       JSObject out=new JSObject();out.put("models",arr);call.resolve(out);
     }catch(Throwable x){call.reject("Model list failed",new Exception(x));}
@@ -83,7 +83,7 @@ public class LlamaPlugin extends Plugin {
         }
         if(out.exists()&&!out.delete())throw new java.io.IOException("Could not replace existing model");
         if(!tmp.renameTo(out))throw new java.io.IOException("Could not finalize download");
-        JSObject r=new JSObject();r.put("ok",true);r.put("name",name);r.put("path",out.getAbsolutePath());r.put("bytes",out.length());call.resolve(r);Diagnostic.log("MODEL download complete name="+name+" bytes="+out.length());
+        JSObject r=new JSObject();r.put("ok",true);r.put("name",name);r.put("path",out.getAbsolutePath());r.put("bytes",String.valueOf(out.length()));call.resolve(r);Diagnostic.log("MODEL download complete name="+name+" bytes="+out.length());
       }catch(Throwable x){tmp.delete();Diagnostic.log("MODEL download failed "+android.util.Log.getStackTraceString(x));call.reject("Download failed: "+x.getMessage(),new Exception(x));}
       finally{if(c!=null)c.disconnect();}
     });
