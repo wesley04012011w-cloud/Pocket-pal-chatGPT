@@ -13,6 +13,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.concurrent.Executors;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -41,6 +43,50 @@ public class LlamaPlugin extends Plugin {
       }
       JSObject r=new JSObject();r.put("path",out.getAbsolutePath());r.put("name",name);call.resolve(r);
     }catch(Throwable x){Diagnostic.log("PICK_MODEL_ERROR "+android.util.Log.getStackTraceString(x));call.reject("Model copy failed",new Exception(x));}
+  }
+
+  @PluginMethod
+  public void listModels(PluginCall call){
+    try{
+      File dir=new File(getContext().getFilesDir(),"models"); dir.mkdirs();
+      com.getcapacitor.JSArray arr=new com.getcapacitor.JSArray();
+      File[] files=dir.listFiles();
+      if(files!=null) for(File f:files){
+        if(!f.isFile()||!f.getName().toLowerCase().endsWith(".gguf")) continue;
+        JSObject m=new JSObject();m.put("name",f.getName());m.put("path",f.getAbsolutePath());m.put("bytes",f.length());arr.put(m);
+      }
+      JSObject out=new JSObject();out.put("models",arr);call.resolve(out);
+    }catch(Throwable x){call.reject("Model list failed",new Exception(x));}
+  }
+
+  @PluginMethod
+  public void unloadModel(PluginCall call){
+    try{NativeBridge.nativeFree();call.resolve();}catch(Throwable x){call.reject("Unload failed",new Exception(x));}
+  }
+
+  @PluginMethod
+  public void downloadModel(PluginCall call){
+    String url=call.getString("url"),requestedName=call.getString("name");
+    if(url==null||requestedName==null){call.reject("Missing download information");return;}
+    String name=requestedName.replaceAll("[^A-Za-z0-9._-]","_");
+    Executors.newSingleThreadExecutor().execute(()->{
+      File dir=new File(getContext().getFilesDir(),"models");dir.mkdirs();
+      File out=new File(dir,name),tmp=new File(dir,name+".part");HttpURLConnection c=null;
+      try{
+        Diagnostic.log("MODEL download start name="+name+" url="+url);
+        c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(20000);c.setReadTimeout(30000);c.setInstanceFollowRedirects(true);c.setRequestProperty("User-Agent","PocketPal Local");c.connect();
+        int code=c.getResponseCode();if(code<200||code>=300)throw new java.io.IOException("HTTP "+code);
+        long total=c.getContentLengthLong(),done=0,last=-1;
+        try(InputStream in=c.getInputStream();FileOutputStream fos=new FileOutputStream(tmp)){
+          byte[] b=new byte[1024*1024];int n;
+          while((n=in.read(b))!=-1){if(n==0)continue;fos.write(b,0,n);done+=n;long pct=total>0?(done*100/total):-1;if(pct!=last){last=pct;JSObject p=new JSObject();p.put("name",name);p.put("bytes",done);p.put("total",total);p.put("percent",pct);notifyListeners("downloadProgress",p);}}
+        }
+        if(out.exists()&&!out.delete())throw new java.io.IOException("Could not replace existing model");
+        if(!tmp.renameTo(out))throw new java.io.IOException("Could not finalize download");
+        JSObject r=new JSObject();r.put("ok",true);r.put("name",name);r.put("path",out.getAbsolutePath());r.put("bytes",out.length());call.resolve(r);Diagnostic.log("MODEL download complete name="+name+" bytes="+out.length());
+      }catch(Throwable x){tmp.delete();Diagnostic.log("MODEL download failed "+android.util.Log.getStackTraceString(x));call.reject("Download failed: "+x.getMessage(),new Exception(x));}
+      finally{if(c!=null)c.disconnect();}
+    });
   }
 
   @PluginMethod
