@@ -20,3 +20,30 @@
 .check{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:13px;margin:11px 0}
 .check input{accent-color:#fff}
 @media(max-width:560px){.float-model{max-width:48vw}.model-card{padding:13px}.model-info b{font-size:13px}.model-btn{padding:9px 11px}}
+
+/* Native-feeling touch feedback: remove WebView's default blue tap/focus flash */
+*,
+*::before,
+*::after{
+  -webkit-tap-highlight-color:transparent;
+}
+button,
+a,
+input,
+textarea,
+select{
+  -webkit-tap-highlight-color:transparent;
+}
+button:focus,
+button:focus-visible,
+a:focus,
+a:focus-visible,
+input:focus,
+textarea:focus,
+select:focus{
+  outline:none;
+}
+button{
+  -webkit-appearance:none;
+  appearance:none;
+}
