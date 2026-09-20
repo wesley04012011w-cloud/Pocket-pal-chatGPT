@@ -46,6 +46,27 @@ public class LlamaPlugin extends Plugin {
   }
 
   @PluginMethod
+  public void pickText(PluginCall call){
+    Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+    i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("text/plain");
+    startActivityForResult(call,i,"textPicked");
+  }
+
+  @ActivityCallback
+  public void textPicked(PluginCall call,ActivityResult result){
+    try{
+      Intent data=result.getData();
+      if(data==null||data.getData()==null){call.reject("No file selected");return;}
+      Uri uri=data.getData();String name=name(uri);
+      StringBuilder text=new StringBuilder();
+      try(InputStream in=getContext().getContentResolver().openInputStream(uri)){
+        byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)text.append(new String(b,java.nio.charset.StandardCharsets.UTF_8));
+      }
+      JSObject r=new JSObject();r.put("name",name);r.put("text",text.toString());call.resolve(r);
+    }catch(Throwable x){Diagnostic.log("PICK_TEXT_ERROR "+android.util.Log.getStackTraceString(x));call.reject("TXT read failed",new Exception(x));}
+  }
+
+  @PluginMethod
   public void listModels(PluginCall call){
     try{
       File dir=new File(getContext().getFilesDir(),"models"); dir.mkdirs();
@@ -111,13 +132,13 @@ public class LlamaPlugin extends Plugin {
       }
       Diagnostic.log("MODEL profile bytes="+modelBytes+" requestedContext="+requestedContext+" context="+context+" requestedBatch="+requestedBatch+" batch="+batch+" avail="+mi.availMem+" low="+mi.lowMemory);
     }
-    boolean flash=call.getBoolean("flashAttention",true),mmap=call.getBoolean("mmap",true),mlock=call.getBoolean("mlock",false);
+    boolean flash=call.getBoolean("flashAttention",true),mmap=call.getBoolean("mmap",true),mlock=call.getBoolean("mlock",false),offloadKQV=call.getBoolean("offloadKQV",false);
     final String loadPath=path;
     final int loadContext=context,loadThreads=threads,loadBatchThreads=bt,loadBatch=batch;
-    final boolean loadFlash=flash,loadMmap=mmap,loadMlock=mlock;
+    final boolean loadFlash=flash,loadMmap=mmap,loadMlock=mlock,loadOffloadKQV=offloadKQV;
     Executors.newSingleThreadExecutor().execute(()->{
       Diagnostic.log("MODEL load start path="+loadPath+" context="+loadContext+" batch="+loadBatch);
-      boolean ok=NativeBridge.nativeLoad(loadPath,loadContext,loadThreads,loadBatchThreads,loadBatch,loadFlash,loadMmap,loadMlock);
+      boolean ok=NativeBridge.nativeLoad(loadPath,loadContext,loadThreads,loadBatchThreads,loadFlash,loadMmap,loadMlock,loadOffloadKQV);
       Diagnostic.log("MODEL load result="+ok);
       JSObject r=new JSObject();r.put("ok",ok);if(ok)r.put("name",new File(path).getName());call.resolve(r);
     });
