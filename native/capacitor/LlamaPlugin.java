@@ -26,11 +26,6 @@ public class LlamaPlugin extends Plugin {
   }
 
   @ActivityCallback
-  private void modelPicked(PluginCall call,com.getcapacitor.PluginCallResult result){
-    if(result==null){call.reject("No file selected");return;}
-  }
-
-  @ActivityCallback
   public void modelPicked(PluginCall call,Intent data){
     try{
       if(data==null||data.getData()==null){call.reject("No file selected");return;}
