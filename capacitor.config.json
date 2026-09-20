@@ -1,0 +1,6 @@
+{
+  "appId":"dev.pocketpal.local",
+  "appName":"PocketPal Local",
+  "webDir":"web",
+  "server":{"androidScheme":"https"}
+}
