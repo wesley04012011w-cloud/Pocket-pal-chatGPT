@@ -150,14 +150,15 @@ public class LlamaPlugin extends Plugin {
     String[] roles=new String[rolesArray.length()],contents=new String[contentsArray.length()];
     try{for(int i=0;i<roles.length;i++)roles[i]=rolesArray.getString(i);for(int i=0;i<contents.length;i++)contents[i]=contentsArray.getString(i);}catch(JSONException x){call.reject("Invalid conversation arrays",x);return;}
     int max=call.getInt("maxTokens",1024),topK=call.getInt("topK",40);
-    float temp=call.getDouble("temperature",.7).floatValue(),topP=call.getDouble("topP",.95).floatValue(),minP=call.getDouble("minP",.05).floatValue();
+    float temp=call.getDouble("temperature",.7).floatValue(),topP=call.getDouble("topP",.95).floatValue(),minP=call.getDouble("minP",.05).floatValue(),repeatPenalty=call.getDouble("repeatPenalty",1.1).floatValue();
+    int repeatLastN=call.getInt("repeatLastN",64);
     long seed=call.getLong("seed",-1L);boolean jinja=call.getBoolean("useJinja",true),thinking=call.getBoolean("enableThinking",true);String sys=call.getString("systemPrompt","");
     Executors.newSingleThreadExecutor().execute(()->{
       Diagnostic.log("GENERATION start");
       NativeBridge.TokenCallback cb=(text,done)->{
         JSObject e=new JSObject();e.put("text",text);e.put("done",done);notifyListeners("token",e);
       };
-      boolean ok=NativeBridge.nativeGenerateChat(roles,contents,max,temp,topP,topK,minP,seed,jinja,thinking,sys,cb);
+      boolean ok=NativeBridge.nativeGenerateChat(roles,contents,max,temp,topP,topK,minP,repeatPenalty,repeatLastN,seed,jinja,thinking,sys,cb);
       Diagnostic.log("GENERATION return ok="+ok);
       JSObject end=new JSObject();end.put("ok",ok);notifyListeners("generationDone",end);call.resolve(end);
     });
