@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import {registerPlugin} from '@capacitor/core';
 
 const Llama=registerPlugin('Llama');
-const DEFAULT_CFG={context:4096,threads:4,batchThreads:8,batch:256,maxTokens:1024,topK:40,temperature:.7,topP:.95,minP:.05,systemPrompt:'',enableThinking:true,flashAttention:true,mmap:true,mlock:false,useJinja:true};
+const DEFAULT_CFG={context:4096,threads:4,batchThreads:4,batch:256,maxTokens:1024,topK:40,temperature:.7,topP:.95,minP:.05,systemPrompt:'',enableThinking:true,flashAttention:true,mmap:true,mlock:false,useJinja:true};
 const CATALOG=[
  {name:'Qwen3 0.6B · Q4_0',file:'Qwen3-0.6B-Q4_0.gguf',size:'429 MB',url:'https://huggingface.co/ggml-org/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_0.gguf?download=true'},
  {name:'Qwen3 0.6B · Q8_0',file:'Qwen3-0.6B-Q8_0.gguf',size:'805 MB',url:'https://huggingface.co/ggml-org/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf?download=true'},
