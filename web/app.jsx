@@ -21,8 +21,8 @@ function parseThinking(s){const tags=[['<think>','</think>'],['<thinking>','</th
 function Icon({name}){const paths={menu:'M4 7h16M4 12h16M4 17h16',edit:'M4 20l4.5-1L19 8.5 15.5 5 5 15.5 4 20z',more:'M12 6v.01M12 12v.01M12 18v.01',plus:'M12 5v14M5 12h14',send:'M5 12h13M13 6l6 6-6 6',stop:'M7 7h10v10H7z',back:'M15 18l-6-6 6-6',chat:'M5 5h14v10H8l-3 3V5z',models:'M5 7h14M5 12h14M5 17h14',settings:'M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M15.5 12a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0',log:'M6 4h12v16H6zM9 8h6M9 12h6M9 16h4',upload:'M12 16V5M8 9l4-4 4 4',download:'M12 5v11M8 12l4 4 4-4',close:'M6 6l12 12M18 6L6 18',spark:'M12 3l1.7 6.3L20 11l-6.3 1.7L12 19l-1.7-6.3L4 11l6.3-1.7z'};return <svg className="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]||paths.spark}/></svg>}
 
 function App(){
- const initialChats=readJSON('pp_chats',[]);const [chats,setChats]=useState(initialChats.length?initialChats:[makeChat()]);
- const [chatId,setChatId]=useState((initialChats[0]||{}).id||null);
+ const initialChats=readJSON('pp_chats',[]);const seedChat=initialChats[0]||makeChat();const [chats,setChats]=useState(initialChats.length?initialChats:[seedChat]);
+ const [chatId,setChatId]=useState(seedChat.id);
  const [model,setModel]=useState(localStorage.getItem('pp_model')||'');
  const [modelPath,setModelPath]=useState(localStorage.getItem('pp_model_path')||'');
  const [cfg,setCfg]=useState({...DEFAULT_CFG,...readJSON('pp_settings',{})});
