@@ -1,6 +1,7 @@
 package dev.pocketpal.local;
 
 import android.content.Intent;
+import androidx.activity.result.ActivityResult;
 import android.net.Uri;
 import android.provider.OpenableColumns;
 import com.getcapacitor.JSObject;
@@ -26,10 +27,12 @@ public class LlamaPlugin extends Plugin {
   }
 
   @ActivityCallback
-  public void modelPicked(PluginCall call,Intent data){
+  public void modelPicked(PluginCall call,ActivityResult result){
     try{
+      Intent data=result.getData();
       if(data==null||data.getData()==null){call.reject("No file selected");return;}
-      Uri uri=data.getData();getActivity().getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      Uri uri=data.getData();
+      try{getActivity().getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Throwable ignored){}
       String name=name(uri);File dir=new File(getContext().getFilesDir(),"models");dir.mkdirs();File out=new File(dir,name);
       try(InputStream in=getContext().getContentResolver().openInputStream(uri);FileOutputStream fos=new FileOutputStream(out)){
         byte[] b=new byte[1024*1024];int n;while((n=in.read(b))>0)fos.write(b,0,n);
@@ -70,7 +73,19 @@ public class LlamaPlugin extends Plugin {
   }
 
   @PluginMethod public void stop(PluginCall call){NativeBridge.nativeStop();call.resolve();}
-  @PluginMethod public void exportLog(PluginCall call){try{Diagnostic.export(getContext());call.resolve();}catch(Throwable x){call.reject("Export failed",x);}}
+  @PluginMethod public void exportLog(PluginCall call){
+    try{
+      Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.setType("text/plain");i.putExtra(Intent.EXTRA_TITLE,"pocketpal_diagnostics.txt");
+      startActivityForResult(call,i,"exportResult");
+    }catch(Throwable x){call.reject("Export failed",x);}
+  }
+  @ActivityCallback
+  public void exportResult(PluginCall call,ActivityResult result){
+    try{
+      if(result.getResultCode()!=android.app.Activity.RESULT_OK||result.getData()==null||result.getData().getData()==null){call.reject("Export cancelled");return;}
+      Diagnostic.copyForExport(getContext(),result.getData().getData());call.resolve();
+    }catch(Throwable x){call.reject("Export failed",x);}
+  }
 
   private String name(Uri u){
     try(android.database.Cursor c=getContext().getContentResolver().query(u,null,null,null,null)){
