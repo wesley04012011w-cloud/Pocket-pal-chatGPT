@@ -19,6 +19,15 @@ function messageHtml(){
  return current.messages.map(m=>m.role==='user'?'<div class="msg user"><div class="bubble"><div class="role">You</div>'+md(m.content)+'</div></div>':'<div class="msg"><div class="bubble"><div class="role">Assistant</div>'+md(m.content)+'</div></div>').join('');
 }
 
+function updateLiveUI(){
+ const statsEl=$('#stats');if(statsEl)statsEl.textContent=generationStats;
+ const thinkingEl=document.querySelector('.thinking-body');
+ if(thinkingEl&&thinkingLive)thinkingEl.innerHTML=md(thinking);
+ const assistant=current.messages[current.messages.length-1];
+ const bubbles=document.querySelectorAll('.msg:not(.user) .bubble');
+ const bubble=bubbles[bubbles.length-1];
+ if(bubble&&assistant){bubble.innerHTML='<div class="role">Assistant</div>'+md(assistant.content||'')}
+}
 function render(){
  app.innerHTML='<div class="app"><div class="scrim"></div><aside class="drawer"><div class="brand"><b>PocketPal Local</b><span>Local AI assistant</span></div><div class="nav"><button class="active" id="navChats">▣ &nbsp; Chats</button><button id="newChat">＋ &nbsp; New chat</button><button id="models">◈ &nbsp; Models</button><button id="settings">⚙ &nbsp; Settings</button><button id="logs">▤ &nbsp; Logs</button></div><div class="saved">CONVERSATIONS</div><div class="chat-list">'+chats.map(c=>'<button class="chat-row '+(c.id===current.id?'active':'')+'" data-chat="'+c.id+'"><strong>'+esc(c.title)+'</strong><small>'+c.messages.length+' messages</small></button>').join('')+'</div><div class="model-dock"><small>Local model</small><b>'+esc(model||'No model loaded')+'</b></div></aside><main class="shell"><div class="stars" aria-hidden="true"></div><div class="floating-top"><button class="float-btn menu" id="menu" aria-label="Menu">☰</button><div class="float-model">'+esc(model||'No model loaded')+'</div><div class="float-actions"><button class="float-btn" id="edit" aria-label="Focus input">✎</button><button class="float-btn" id="more" aria-label="Settings">⋮</button></div></div><section class="messages" id="messages">'+messageHtml()+'</section><div class="composer-wrap">'+(thinkingLive?'<div class="thinking"><div class="thinking-head"><span class="brain">◉</span><span>Thinking...</span><span style="margin-left:auto">•••</span></div><div class="thinking-body">'+md(thinking)+'</div></div>':'')+'<div class="composer"><div class="input-row"><button class="icon" id="attach">＋</button><textarea class="input" id="input" rows="1" placeholder="Ask assistant..."></textarea><button class="send '+(generating?'stop':'')+'" id="send">'+(generating?'■':'➤')+'</button></div><div class="meta stats" id="stats"></div></div></div></main></div>';
  wire();
@@ -45,7 +54,14 @@ async function loadModelPath(path,name){
  catch(e){console.error(e);alert('Model load error. Export Logs for diagnosis.')}
 }
 async function refreshModels(){try{const r=await Llama.listModels();downloadedModels=r?.models||[];return downloadedModels}catch(e){console.error(e);return []}}
-function fmtBytes(n){if(!n)return '0 B';const u=['B','MB','GB'];let i=0,x=n;while(x>=1024&&i<2){x/=1024;i++}return x.toFixed(i?1:0)+' '+u[i]}
+function fmtBytes(n){
+ const x0=Number(n);
+ if(!Number.isFinite(x0)||x0<=0)return '0 B';
+ const u=['B','KB','MB','GB','TB'];let x=x0,i=0;
+ while(x>=1024&&i<u.length-1){x/=1024;i++}
+ return x.toFixed(i?1:0)+' '+u[i];
+}
+
 async function showModels(){
  const list=await refreshModels();
  const catalog=[
@@ -85,9 +101,21 @@ async function send(){
 Llama.addListener('token',ev=>{
  if(!ev.text)return;
  generatedTokens++;const elapsed=Math.max(.001,(performance.now()-generationStarted)/1000);generationStats=generatedTokens+' tokens · '+(generatedTokens/elapsed).toFixed(1)+' tok/s';
- raw+=ev.text;const p=parseThinking(raw);thinking=p.thinking;answer=p.answer;thinkingLive=p.active;
- const a=current.messages[current.messages.length-1];a.thinking=thinking;a.content=answer;save();render();
- const m=$('#messages');if(m)m.scrollTop=m.scrollHeight;
+ raw+=ev.text;const p=parseThinking(raw);thinking=p.thinking;answer=p.answer;
+ const wasThinkingLive=thinkingLive;thinkingLive=p.active;
+ const a=current.messages[current.messages.length-1];a.thinking=thinking;a.content=answer;save();
+ if(thinkingLive && !wasThinkingLive){
+   render();
+ }else if(!thinkingLive && wasThinkingLive){
+   render();
+ }else{
+   updateLiveUI();
+ }
+ const m=$('#messages');
+ if(m){
+   const nearBottom=m.scrollHeight-m.scrollTop-m.clientHeight<120;
+   if(nearBottom)m.scrollTop=m.scrollHeight;
+ }
 });
 Llama.addListener('generationDone',()=>{
  const p=parseThinking(raw);const a=current.messages[current.messages.length-1];a.thinking=p.thinking;a.content=p.answer;thinkingLive=false;generating=false;const elapsed=Math.max(.001,(performance.now()-generationStarted)/1000);generationStats=generatedTokens+' tokens · '+(generatedTokens/elapsed).toFixed(1)+' tok/s';save();render();
