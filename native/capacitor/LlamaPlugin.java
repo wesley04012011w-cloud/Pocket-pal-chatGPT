@@ -14,6 +14,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.concurrent.Executors;
+import org.json.JSONArray;
+import org.json.JSONException;
 
 @CapacitorPlugin(name="Llama")
 public class LlamaPlugin extends Plugin {
@@ -38,7 +40,7 @@ public class LlamaPlugin extends Plugin {
         byte[] b=new byte[1024*1024];int n;while((n=in.read(b))>0)fos.write(b,0,n);
       }
       JSObject r=new JSObject();r.put("path",out.getAbsolutePath());r.put("name",name);call.resolve(r);
-    }catch(Throwable x){Diagnostic.log("PICK_MODEL_ERROR "+android.util.Log.getStackTraceString(x));call.reject("Model copy failed",x);}
+    }catch(Throwable x){Diagnostic.log("PICK_MODEL_ERROR "+android.util.Log.getStackTraceString(x));call.reject("Model copy failed",new Exception(x));}
   }
 
   @PluginMethod
@@ -56,10 +58,11 @@ public class LlamaPlugin extends Plugin {
 
   @PluginMethod
   public void generate(PluginCall call){
-    String[] roles=call.getArray("roles").toStringArray();
-    String[] contents=call.getArray("contents").toStringArray();
+    JSONArray rolesArray=call.getArray("roles"),contentsArray=call.getArray("contents");
+    String[] roles=new String[rolesArray.length()],contents=new String[contentsArray.length()];
+    try{for(int i=0;i<roles.length;i++)roles[i]=rolesArray.getString(i);for(int i=0;i<contents.length;i++)contents[i]=contentsArray.getString(i);}catch(JSONException x){call.reject("Invalid conversation arrays",x);return;}
     int max=call.getInt("maxTokens",1024),topK=call.getInt("topK",40);
-    float temp=(float)call.getDouble("temperature",.7),topP=(float)call.getDouble("topP",.95),minP=(float)call.getDouble("minP",.05);
+    float temp=call.getDouble("temperature",.7).floatValue(),topP=call.getDouble("topP",.95).floatValue(),minP=call.getDouble("minP",.05).floatValue();
     long seed=call.getLong("seed",-1L);boolean jinja=call.getBoolean("useJinja",true),thinking=call.getBoolean("enableThinking",true);String sys=call.getString("systemPrompt","");
     Executors.newSingleThreadExecutor().execute(()->{
       Diagnostic.log("GENERATION start");
@@ -77,7 +80,7 @@ public class LlamaPlugin extends Plugin {
     try{
       Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.setType("text/plain");i.putExtra(Intent.EXTRA_TITLE,"pocketpal_diagnostics.txt");
       startActivityForResult(call,i,"exportResult");
-    }catch(Throwable x){call.reject("Export failed",x);}
+    }catch(Throwable x){call.reject("Export failed",new Exception(x));}
   }
   @ActivityCallback
   public void exportResult(PluginCall call,ActivityResult result){
