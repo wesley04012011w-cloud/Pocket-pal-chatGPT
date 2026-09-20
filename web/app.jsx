@@ -15,19 +15,19 @@ const makeChat=()=>({id:crypto.randomUUID(),title:'New chat',messages:[]});
 const fmtBytes=n=>{const x0=Number(n);if(!Number.isFinite(x0)||x0<=0)return'0 B';const u=['B','KB','MB','GB','TB'];let x=x0,i=0;while(x>=1024&&i<u.length-1){x/=1024;i++}return x.toFixed(i?1:0)+' '+u[i]};
 const escapeHtml=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function renderMarkdown(src=''){
- const lines=String(src??'').replace(/\\r/g,'').split('\\n'),out=[];let inCode=false,code=[];
- const inline=x=>escapeHtml(x).replace(/\\*\\*(.+?)\\*\\*/gs,'<strong>$1</strong>').replace(/__(.+?)__/gs,'<strong>$1</strong>').replace(/\\*(.+?)\\*/gs,'<em>$1</em>').replace(/_(.+?)_/gs,'<em>$1</em>').replace(/\\x60([^\\x60]+)\\x60/g,'<code>$1</code>').replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g,'<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+ const lines=String(src??'').replace(/\r/g,'').split('\n'),out=[];let inCode=false,code=[];
+ const inline=x=>escapeHtml(x).replace(/\*\*(.+?)\*\*/gs,'<strong>$1</strong>').replace(/__(.+?)__/gs,'<strong>$1</strong>').replace(/\*(.+?)\*/gs,'<em>$1</em>').replace(/_(.+?)_/gs,'<em>$1</em>').replace(/\x60([^\x60]+)\x60/g,'<code>$1</code>').replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noreferrer">$1</a>');
  for(let i=0;i<lines.length;i++){const line=lines[i];
-  if(line.trim().startsWith('\\x60\\x60\\x60')){if(inCode){out.push('<pre><code>'+escapeHtml(code.join('\\n'))+'</code></pre>');code=[];inCode=false}else inCode=true;continue}
+  if(line.trim().startsWith('\x60\x60\x60')){if(inCode){out.push('<pre><code>'+escapeHtml(code.join('\n'))+'</code></pre>');code=[];inCode=false}else inCode=true;continue}
   if(inCode){code.push(line);continue}
-  if(/^\\s*\\|/.test(line)&&i+1<lines.length&&/^\\s*\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)+\\|?\\s*$/.test(lines[i+1])){const row=x=>x.trim().replace(/^\\|/,'').replace(/\\|$/,'').split('|').map(c=>inline(c.trim()));const h=row(line);i++;const rs=[];while(i+1<lines.length&&/^\\s*\\|/.test(lines[i+1])){i++;rs.push(row(lines[i]))}out.push('<div class="md-table-wrap"><table><thead><tr>'+h.map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>'+rs.map(r=>'<tr>'+h.map((_,j)=>'<td>'+(r[j]??'')+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>');continue}
-  if(/^#{1,6}\\s/.test(line)){const m=line.match(/^(#{1,6})\\s+(.*)$/);out.push('<h'+m[1].length+'>'+inline(m[2])+'</h'+m[1].length+'>');continue}
-  if(/^\\s*>/.test(line)){out.push('<blockquote>'+inline(line.replace(/^\\s*>\\s?/,'') )+'</blockquote>');continue}
-  if(/^\\s*[-*+]\\s+/.test(line)){let a=[];while(i<lines.length&&/^\\s*[-*+]\\s+/.test(lines[i])){a.push('<li>'+inline(lines[i].replace(/^\\s*[-*+]\\s+/,''))+'</li>');i++}i--;out.push('<ul>'+a.join('')+'</ul>');continue}
-  if(/^\\s*\\d+[.)]\\s+/.test(line)){let a=[];while(i<lines.length&&/^\\s*\\d+[.)]\\s+/.test(lines[i])){a.push('<li>'+inline(lines[i].replace(/^\\s*\\d+[.)]\\s+/,''))+'</li>');i++}i--;out.push('<ol>'+a.join('')+'</ol>');continue}
+  if(/^\s*\|/.test(line)&&i+1<lines.length&&/^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(lines[i+1])){const row=x=>x.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>inline(c.trim()));const h=row(line);i++;const rs=[];while(i+1<lines.length&&/^\s*\|/.test(lines[i+1])){i++;rs.push(row(lines[i]))}out.push('<div class="md-table-wrap"><table><thead><tr>'+h.map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>'+rs.map(r=>'<tr>'+h.map((_,j)=>'<td>'+(r[j]??'')+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>');continue}
+  if(/^#{1,6}\s/.test(line)){const m=line.match(/^(#{1,6})\s+(.*)$/);out.push('<h'+m[1].length+'>'+inline(m[2])+'</h'+m[1].length+'>');continue}
+  if(/^\s*>/.test(line)){out.push('<blockquote>'+inline(line.replace(/^\s*>\s?/,'') )+'</blockquote>');continue}
+  if(/^\s*[-*+]\s+/.test(line)){let a=[];while(i<lines.length&&/^\s*[-*+]\s+/.test(lines[i])){a.push('<li>'+inline(lines[i].replace(/^\s*[-*+]\s+/,''))+'</li>');i++}i--;out.push('<ul>'+a.join('')+'</ul>');continue}
+  if(/^\s*\d+[.)]\s+/.test(line)){let a=[];while(i<lines.length&&/^\s*\d+[.)]\s+/.test(lines[i])){a.push('<li>'+inline(lines[i].replace(/^\s*\d+[.)]\s+/,''))+'</li>');i++}i--;out.push('<ol>'+a.join('')+'</ol>');continue}
   if(!line.trim()){out.push('<br>');continue}out.push('<p>'+inline(line)+'</p>');
  }
- if(inCode)out.push('<pre><code>'+escapeHtml(code.join('\\n'))+'</code></pre>');return out.join('');
+ if(inCode)out.push('<pre><code>'+escapeHtml(code.join('\n'))+'</code></pre>');return out.join('');
 }
 function Markdown({text=''}){return <div className="markdown" dangerouslySetInnerHTML={{__html:renderMarkdown(text)}}/>}
 function parseThinking(s){const tags=[['<think>','</think>'],['<thinking>','</thinking>'],['<|thinking|>','<|end_thinking|>'],['<|begin_of_thought|>','<|end_of_thought|>'],['<|begin_of_thinking|>','<|end_of_thinking|>'],['<｜begin▁of▁thinking｜>','<｜end▁of▁thinking｜>']];let best=-1,o='',c='';for(const[a,b]of tags){const i=s.indexOf(a);if(i>=0&&(best<0||i<best)){best=i;o=a;c=b}}if(best>=0){const st=best+o.length,e=s.indexOf(c,st);if(e>=0)return{thinking:s.slice(st,e).trim(),answer:s.slice(e+c.length).trim(),active:false};return{thinking:s.slice(st).trim(),answer:'',active:true}}for(const[a,b]of tags){const e=s.indexOf(b);if(e>=0)return{thinking:s.slice(0,e).trim(),answer:s.slice(e+b.length).trim(),active:false}}return{thinking:'',answer:s,active:false}}
