@@ -1,4 +1,4 @@
-name: Build Capacitor Android APK
+name: Build VYRA Android APK
 
 on:
   workflow_dispatch:
@@ -119,31 +119,8 @@ jobs:
           from pathlib import Path
           p=Path("android/app/build.gradle")
           s=p.read_text()
-          block='''
-          android {
-              ndkVersion "27.2.12479018"
-              defaultConfig {
-                  ndk {
-                      abiFilters "arm64-v8a"
-                  }
-              }
-              externalNativeBuild {
-                  cmake {
-                      path file("src/main/cpp/CMakeLists.txt")
-                      version "3.31.6"
-                  }
-              }
-              packagingOptions {
-                  jniLibs {
-                      useLegacyPackaging true
-                  }
-              }
-          }
-          '''
-          s += "\n" + block
-          p.write_text(s)
-          PY
-          sed -i 's/android:label="[^"]*"/android:label="PocketPal Local"/' android/app/src/main/AndroidManifest.xml || true
+          block='''\n          android {\n              ndkVersion "27.2.12479018"\n              defaultConfig {\n                  ndk {\n                      abiFilters "arm64-v8a"\n                  }\n              }\n              externalNativeBuild {\n                  cmake {\n                      path file("src/main/cpp/CMakeLists.txt")\n                      version "3.31.6"\n                  }\n              }\n              packagingOptions {\n                  jniLibs {\n                      useLegacyPackaging true\n                  }\n              }\n          }\n          '''\n          s += "\n" + block\n          p.write_text(s)\n          PY
+          sed -i 's/android:label="[^"]*"/android:label="VYRA"/' android/app/src/main/AndroidManifest.xml || true
           grep -q 'android.permission.INTERNET' android/app/src/main/AndroidManifest.xml || sed -i '/<manifest /a\    <uses-permission android:name="android.permission.INTERNET"/>' android/app/src/main/AndroidManifest.xml
 
       - name: Sync Capacitor
@@ -161,6 +138,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pocketpal-capacitor-debug-apk
+          name: vyra-capacitor-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
