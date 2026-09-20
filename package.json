@@ -1,6 +1,6 @@
 {
-  "name": "pocketpal-local",
-  "version": "0.2.0",
+  "name": "vyra-local",
+  "version": "0.3.0",
   "private": true,
   "scripts": {
     "build": "esbuild web/app.jsx --bundle --outfile=web/app.bundle.js --loader:.jsx=jsx",
