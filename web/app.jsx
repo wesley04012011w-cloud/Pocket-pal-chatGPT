@@ -64,17 +64,14 @@ function App(){
  const [generating,setGenerating]=useState(false),[stream,setStream]=useState({answer:'',thinking:'',thinkingLive:false,stats:'',flash:'',flashKey:0});
  const messagesRef=useRef(null),thinkingRef=useRef(null);
  const [input,setInput]=useState(''),[downloaded,setDownloaded]=useState([]),[downloading,setDownloading]=useState(null);
- const genRef=useRef({count:0,start:0,raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[],modelDone:false,finishAt:0});
+ const genRef=useRef({count:0,start:0,raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[]});
  const genLiveRef=useRef(false),chatIdRef=useRef(chatId),streamRef=useRef(stream),rafRef=useRef(null);
  const current=useMemo(()=>chats.find(c=>c.id===chatId)||chats[0],[chats,chatId]);
  useEffect(()=>{chatIdRef.current=chatId},[chatId]);useEffect(()=>{streamRef.current=stream},[stream]);
- const scrollRafRef=useRef(null);
  useEffect(()=>{
    const el=messagesRef.current;if(!el)return;
-   const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<260;
-   if(!(nearBottom||generating))return;
-   if(scrollRafRef.current)return;
-   scrollRafRef.current=requestAnimationFrame(()=>{scrollRafRef.current=null;el.scrollTop=el.scrollHeight});
+   const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<220;
+   if(nearBottom||generating)el.scrollTo({top:el.scrollHeight,behavior:'smooth'});
  },[current?.messages?.length,stream.answer,generating,chatId]);
  useEffect(()=>{
    const el=thinkingRef.current;if(!el)return;
@@ -93,45 +90,39 @@ function App(){
    const tick=()=>{
      const g=genRef.current;
      if(!genLiveRef.current)return;
-     const now=performance.now();
      if(g.visibleAnswer.length<g.targetAnswer.length){
        const nextChar=g.targetAnswer[g.visibleAnswer.length];
        g.visibleAnswer+=nextChar;
-       g.trail.push({time:now});
+       const now=performance.now();g.trail.push({time:now});g.trail=g.trail.filter(x=>now-x.time<500).slice(-40);
+       const elapsed=Math.max(.001,(now-g.start)/1000);
+       const next={answer:g.visibleAnswer,thinking:streamRef.current.thinking,thinkingLive:streamRef.current.thinkingLive,flash:nextChar,trail:g.trail.map((x,i)=>({age:Math.min(500,Math.max(0,now-(x.time||now)))})),stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
+       streamRef.current=next;setStream(next);scheduleCommit();
      }
-     g.trail=g.trail.filter(x=>now-x.time<STREAM_TRAIL_MS).slice(-STREAM_TRAIL_MAX);
-     const elapsed=Math.max(.001,(now-g.start)/1000);
-     const next={answer:g.visibleAnswer,thinking:streamRef.current.thinking,thinkingLive:g.modelDone?false:streamRef.current.thinkingLive,flash:'',trail:g.trail.map(x=>({age:Math.min(STREAM_TRAIL_MS,Math.max(0,now-x.time))})),stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
-     streamRef.current=next;setStream(next);
-     if(g.modelDone&&g.visibleAnswer.length>=g.targetAnswer.length){
-       if(!g.finishAt)g.finishAt=now+STREAM_TRAIL_MS;
-       if(now>=g.finishAt){
-         const final={...next,thinkingLive:false,trail:[]};
-         streamRef.current=final;setStream(final);commitStream();genLiveRef.current=false;setGenerating(false);g.timer=null;return;
-       }
-     }
-     g.timer=setTimeout(tick,STREAM_CHAR_MS);
+     if(g.visibleAnswer.length<g.targetAnswer.length||genLiveRef.current)g.timer=setTimeout(tick,18);
    };
    const tokenListener=Llama.addListener('token',ev=>{
      if(!ev?.text)return;
      const g=genRef.current;g.count++;g.raw+=ev.text;
      const p=parseThinking(g.raw);g.targetAnswer=p.answer;
-     const elapsed=Math.max(.001,(performance.now()-g.start)/1000),now=performance.now();
-     g.trail=g.trail.filter(x=>now-x.time<STREAM_TRAIL_MS);
-     const next={answer:g.visibleAnswer,thinking:p.thinking,thinkingLive:p.active,flash:'',trail:g.trail.map(x=>({age:Math.min(STREAM_TRAIL_MS,now-x.time)})),stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
+     const elapsed=Math.max(.001,(performance.now()-g.start)/1000);
+     const now=performance.now();g.trail=g.trail.filter(x=>now-x.time<500);const next={answer:g.visibleAnswer,thinking:p.thinking,thinkingLive:p.active,flash:'',trail:g.trail.map(x=>({age:Math.min(500,now-x.time)})),stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
      streamRef.current=next;setStream(next);
      if(!g.timer)g.timer=setTimeout(tick,0);
    });
    const doneListener=Llama.addListener('generationDone',()=>{
-     const g=genRef.current;const p=parseThinking(g.raw);g.targetAnswer=p.answer;g.modelDone=true;
-     if(!g.timer)g.timer=setTimeout(tick,0);
+     const g=genRef.current,p=parseThinking(g.raw);g.targetAnswer=p.answer;
+     if(g.timer){clearTimeout(g.timer);g.timer=null}
+     g.visibleAnswer=g.targetAnswer;
+     const elapsed=Math.max(.001,(performance.now()-g.start)/1000);
+     const next={answer:g.targetAnswer,thinking:p.thinking,thinkingLive:false,flash:'',trail:[],stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
+     streamRef.current=next;setStream(next);commitStream();setGenerating(false);genLiveRef.current=false;
    });
-   return()=>{tokenListener.then(x=>x.remove());doneListener.then(x=>x.remove());if(rafRef.current)cancelAnimationFrame(rafRef.current);if(scrollRafRef.current)cancelAnimationFrame(scrollRafRef.current);if(genRef.current.timer)clearTimeout(genRef.current.timer)}
+   return()=>{tokenListener.then(x=>x.remove());doneListener.then(x=>x.remove());if(rafRef.current)cancelAnimationFrame(rafRef.current);if(genRef.current.timer)clearTimeout(genRef.current.timer)}
  },[commitStream,scheduleCommit]);
 
  async function loadPath(path,name){try{const r=await Llama.loadModel({path,...engineCfg});if(r.ok){const n=name||path.split('/').pop();setModel(n);localStorage.setItem('pp_model',n);localStorage.setItem('pp_model_path',path);setScreen('chat')}}catch(e){console.error(e);alert('Model load error. Export Logs for diagnosis.')}}
  async function pickAndLoad(){try{const p=await Llama.pickModel();if(p?.path)await loadPath(p.path,p.name||p.path.split('/').pop())}catch(e){console.error(e);alert('Could not load the model.')}} 
- async function send(){if(genLiveRef.current)return;const text=input.trim();if(!text)return;if(!model){setScreen('models');return}const title=current.title==='New chat'?text.slice(0,42):current.title;const msgs=[...current.messages,{role:'user',content:text},{role:'assistant',content:'',thinking:''}];setChats(prev=>prev.map(c=>c.id===current.id?{...c,title,messages:msgs}:c));setInput('');const g={count:0,start:performance.now(),raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[],modelDone:false,finishAt:0};genRef.current=g;const empty={answer:'',thinking:'',thinkingLive:false,flash:'',flashKey:0,stats:'0 tokens · 0.0 tok/s'};streamRef.current=empty;setStream(empty);setGenerating(true);genLiveRef.current=true;try{await Llama.generate({roles:msgs.slice(0,-1).map(x=>x.role),contents:msgs.slice(0,-1).map(x=>x.content),...chatCfg})}catch(e){console.error(e);setGenerating(false);genLiveRef.current=false;commitStream()}}
+ async function send(){if(genLiveRef.current)return;const text=input.trim();if(!text)return;if(!model){setScreen('models');return}const title=current.title==='New chat'?text.slice(0,42):current.title;const msgs=[...current.messages,{role:'user',content:text},{role:'assistant',content:'',thinking:''}];setChats(prev=>prev.map(c=>c.id===current.id?{...c,title,messages:msgs}:c));setInput('');const g={count:0,start:performance.now(),raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[]};genRef.current=g;const empty={answer:'',thinking:'',thinkingLive:false,flash:'',flashKey:0,stats:'0 tokens · 0.0 tok/s'};streamRef.current=empty;setStream(empty);setGenerating(true);genLiveRef.current=true;try{await Llama.generate({roles:msgs.slice(0,-1).map(x=>x.role),contents:msgs.slice(0,-1).map(x=>x.content),...chatCfg})}catch(e){console.error(e);setGenerating(false);genLiveRef.current=false;commitStream()}}
  async function pickText(){try{const r=await Llama.pickText();if(r?.text){setAttachment({name:r.name||'text.txt',text:r.text});setInput(prev=>prev?'[Arquivo: '+(r.name||'text.txt')+']\n'+r.text:r.text)}}catch(e){console.error(e);alert('Could not read the TXT file.')}}
  function newChat(){const c=makeChat();setChats(p=>[c,...p]);setChatId(c.id);setScreen('chat');setDrawer(false);setInput('');setStream({answer:'',thinking:'',thinkingLive:false,flash:'',stats:''})}
  async function unload(){try{await Llama.unloadModel()}finally{setModel('');localStorage.removeItem('pp_model');localStorage.removeItem('pp_model_path');refreshModels()}}
