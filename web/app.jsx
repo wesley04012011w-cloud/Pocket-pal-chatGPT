@@ -216,7 +216,7 @@ function EngineSettings({cfg,theme,onThemeChange,onClose,onApply,onLogs}){
  return <div className="settings-page"><header className="settings-head"><button className="float-btn" onClick={onClose}><Icon name="back"/></button><div><b>Settings</b><small>Engine, memory and CPU</small></div></header>
  <div className="settings-content">
   <section className="settings-section theme-settings"><h3>Interface</h3>
-   <div className="theme-choice"><button className={theme==='chat'?'selected':''} onClick={()=>onThemeChange('chat')}><b>Chat</b><small>Lightweight. No blur, animated background or decorative effects.</small></button><button className={theme==='vyra'?'selected':''} onClick={()=>onThemeChange('vyra')}><b>VYRA</b><small>Full visual style, glow, blur and interface animations.</small></button></div>
+   <div className="theme-choice"><button className={theme==='chat'?'selected':''} onClick={()=>onThemeChange('chat')}><b>Chat</b><small>Lightweight. No blur, animated background or decorative effects.</small></button><button className={theme==='vyra'?'selected':''} onClick={()=>onThemeChange('vyra')}><b>VYRA</b><small>Full visual style, glow, blur and interface animations.</small></button><button className={theme==='immersive'?'selected':''} onClick={()=>onThemeChange('immersive')}><b>Immersive</b><small>Gray and blue tones with a richer, calmer atmosphere.</small></button></div>
   </section>
   <section className="settings-section"><h3>Engine</h3>
    <div className="slider-field"><label>Context / KV cache <b>{v.context}</b></label><Range value={v.context} min={512} max={8192} step={512} onChange={x=>setV({...v,context:x})}/></div>
