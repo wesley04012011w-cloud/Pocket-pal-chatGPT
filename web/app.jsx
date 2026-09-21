@@ -43,7 +43,7 @@ function App(){
  const [engineCfg,setEngineCfg]=useState(()=>({...DEFAULT_ENGINE,...readJSON('pp_engine_settings',{})}));
  const [chatCfg,setChatCfg]=useState(()=>({...DEFAULT_CHAT,...readJSON('pp_chat_settings',{})}));
  const [drawer,setDrawer]=useState(false),[screen,setScreen]=useState('chat'),[settingsOpen,setSettingsOpen]=useState(false),[chatSettingsOpen,setChatSettingsOpen]=useState(false),[loading,setLoading]=useState(true),[attachment,setAttachment]=useState(null);
- const [generating,setGenerating]=useState(false),[stream,setStream]=useState({answer:'',thinking:'',thinkingLive:false,stats:''});
+ const [generating,setGenerating]=useState(false),[stream,setStream]=useState({answer:'',thinking:'',thinkingLive:false,stats:'',flash:''});
  const messagesRef=useRef(null),thinkingRef=useRef(null);
  const [input,setInput]=useState(''),[downloaded,setDownloaded]=useState([]),[downloading,setDownloading]=useState(null);
  const genRef=useRef({count:0,start:0,raw:''}),genLiveRef=useRef(false),chatIdRef=useRef(chatId),streamRef=useRef(stream),rafRef=useRef(null);
@@ -92,7 +92,7 @@ function App(){
  return <div className="app">
   <div className={'scrim '+(drawer?'open':'')} onClick={()=>setDrawer(false)}/>
   <aside className={'drawer '+(drawer?'open':'')}>
-   <div className="brand"><b>PocketPal Local</b><span>Local AI assistant</span></div>
+   <div className="brand"><b>VYRA</b><span>Local AI assistant</span></div>
    <nav className="nav">
     <button className={screen==='chat'?'active':''} onClick={()=>{setScreen('chat');setDrawer(false)}}><Icon name="chat"/>Chats</button>
     <button onClick={newChat}><Icon name="plus"/>New chat</button>
@@ -116,7 +116,7 @@ function App(){
  </div>
 }
 
-function Splash(){return <div className="splash"><div className="splash-mark"><Icon name="spark"/></div><div className="splash-name">PocketPal Local</div><div className="splash-line"><span/></div></div>}
+function Splash(){return <div className="splash"><div className="splash-mark"><span className="splash-logo" aria-hidden="true"/></div><div className="splash-name">VYRA</div><div className="splash-line"><span/></div></div>}
 
 function ModelsPage({downloaded,model,downloading,onBack,onImport,onDownload,onLoad,onUnload}){return <div className="models-page"><div className="models-head"><button className="float-btn" onClick={onBack}><Icon name="back"/></button><div><b>Models</b><small>Download, import and manage GGUF files</small></div></div><div className="import-box"><button className="import-model" onClick={onImport}><Icon name="upload"/>Import GGUF</button><small>Choose a .gguf file from your device</small></div><section><h3>Models to download</h3><div className="model-list">{CATALOG.map(x=><div className="model-card" key={x.file}><div className="model-info"><b>{x.name}</b><small>{x.size}</small></div><button className="model-btn" disabled={!!downloading} onClick={()=>onDownload(x)}>{downloading===x.file?'Downloading...':'Download'}</button></div>)}</div></section><div className="section-line"/><section><h3>Downloaded models</h3><div className="model-list">{downloaded.length?downloaded.map(x=>{const size=CATALOG.find(c=>c.file===x.name)?.size||fmtBytes(x.bytes);return <div className="model-card" key={x.path}><div className="model-info"><b>{x.name}</b><small>{size}</small></div>{x.name===model?<button className="model-btn active-model" onClick={onUnload}>Loaded · Unload</button>:<button className="model-btn" onClick={()=>onLoad(x.path,x.name)}>Load</button>}</div>}):<div className="no-models">No downloaded models yet.</div>}</div></section></div>}
 
