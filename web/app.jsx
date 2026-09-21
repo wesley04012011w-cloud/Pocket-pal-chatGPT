@@ -71,6 +71,7 @@ function App(){
  const [model,setModel]=useState('');
  const [engineCfg,setEngineCfg]=useState(()=>({...DEFAULT_ENGINE,...readJSON('pp_engine_settings',{})}));
  const [uiTheme,setUiTheme]=useState(()=>localStorage.getItem('pp_ui_theme')||'vyra');
+ const [performanceMode,setPerformanceMode]=useState(()=>localStorage.getItem('pp_performance_mode')==='1');
  const [chatCfg,setChatCfg]=useState(()=>({...DEFAULT_CHAT,...readJSON('pp_chat_settings',{})}));
  const [drawer,setDrawer]=useState(false),[screen,setScreen]=useState('chat'),[settingsOpen,setSettingsOpen]=useState(false),[chatSettingsOpen,setChatSettingsOpen]=useState(false),[loading,setLoading]=useState(true),[attachment,setAttachment]=useState(null);
  const [generating,setGenerating]=useState(false),[stream,setStream]=useState({answer:'',thinking:'',thinkingLive:false,stats:'',flash:'',flashKey:0});
@@ -91,7 +92,7 @@ function App(){
    const el=thinkingRef.current;if(!el)return;
    el.scrollTop=el.scrollHeight;
  },[stream.thinking]);
- useEffect(()=>{localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_engine_settings',JSON.stringify(engineCfg));localStorage.setItem('pp_chat_settings',JSON.stringify(chatCfg));localStorage.setItem('pp_ui_theme',uiTheme)},[chats,engineCfg,chatCfg,uiTheme]);
+ useEffect(()=>{localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_engine_settings',JSON.stringify(engineCfg));localStorage.setItem('pp_chat_settings',JSON.stringify(chatCfg));localStorage.setItem('pp_ui_theme',uiTheme);localStorage.setItem('pp_performance_mode',performanceMode?'1':'0')},[chats,engineCfg,chatCfg,uiTheme]);
  useEffect(()=>{const t=setTimeout(()=>setLoading(false),520);return()=>clearTimeout(t)},[]);
  const patchCurrent=useCallback(fn=>setChats(prev=>prev.map(c=>c.id===chatIdRef.current?fn(c):c)),[]);
  const refreshModels=useCallback(async()=>{try{const r=await Llama.listModels();setDownloaded(r?.models||[])}catch{}},[]);
@@ -155,7 +156,7 @@ function App(){
 
  if(loading)return <Splash/>;
 
- return <div className={'app theme-'+uiTheme}>
+ return <div className={'app theme-'+uiTheme+(performanceMode?' performance-mode':'')}>
   <div className={'scrim '+(drawer?'open':'')} onClick={()=>setDrawer(false)}/>
   <aside className={'drawer '+(drawer?'open':'')}>
    <div className="brand"><b>VYRA</b><span>Local AI assistant</span></div>
@@ -216,7 +217,8 @@ function EngineSettings({cfg,theme,onThemeChange,onClose,onApply,onLogs}){
  return <div className="settings-page"><header className="settings-head"><button className="float-btn" onClick={onClose}><Icon name="back"/></button><div><b>Settings</b><small>Engine, memory and CPU</small></div></header>
  <div className="settings-content">
   <section className="settings-section theme-settings"><h3>Interface</h3>
-   <div className="theme-choice"><button className={theme==='chat'?'selected':''} onClick={()=>onThemeChange('chat')}><b>Chat</b><small>Lightweight. No blur, animated background or decorative effects.</small></button><button className={theme==='vyra'?'selected':''} onClick={()=>onThemeChange('vyra')}><b>VYRA</b><small>Full visual style, glow, blur and interface animations.</small></button><button className={theme==='immersive'?'selected':''} onClick={()=>onThemeChange('immersive')}><b>Immersive</b><small>Gray and blue tones with a richer, calmer atmosphere.</small></button></div>
+   <div className="setting-row performance-setting"><span><b>Performance mode</b><small>Reduces visual effects, blur and animation to keep long generations smooth.</small></span><Toggle value={performanceMode} onChange={setPerformanceMode} label="Performance mode"/></div>
+   <div className="theme-choice"><button className={theme==='chat'?'selected':''} onClick={()=>onThemeChange('chat')}><b>Chat</b><small>Clean and minimal interface.</small></button><button className={theme==='vyra'?'selected':''} onClick={()=>onThemeChange('vyra')}><b>VYRA</b><small>Full visual style and atmosphere.</small></button><button className={theme==='immersive'?'selected':''} onClick={()=>onThemeChange('immersive')}><b>Immersive</b><small>Gray and blue tones with a calmer atmosphere.</small></button></div>
   </section>
   <section className="settings-section"><h3>Engine</h3>
    <div className="slider-field"><label>Context / KV cache <b>{v.context}</b></label><Range value={v.context} min={512} max={8192} step={512} onChange={x=>setV({...v,context:x})}/></div>
