@@ -33,3 +33,22 @@ body{overflow:hidden}button,input,textarea{font:inherit}button{-webkit-appearanc
 /* Streaming generation trail */
 .generation-flash{display:inline;white-space:pre-wrap;color:inherit;filter:blur(5px);animation:generationTrail 500ms ease-out both;will-change:filter}
 @keyframes generationTrail{0%{filter:blur(5px)}35%{filter:blur(4px)}70%{filter:blur(1.8px)}100%{filter:blur(0)}}
+
+/* Performance themes */
+.theme-chat .stars{display:none}
+.theme-chat .float-btn,.theme-chat .float-model,.theme-chat .composer{backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none}
+.theme-chat .float-btn{background:#090909;transition:none}
+.theme-chat .messages{scroll-behavior:auto}
+.theme-chat .message-row,.theme-chat .empty,.theme-chat .models-page,.theme-chat .settings-page,.theme-chat .thinking{animation:none}
+.theme-chat .generation-flash{filter:none!important;animation:none!important}
+.theme-chat .composer-wrap{background:#000}
+.theme-chat .thinking{box-shadow:none}
+.theme-chat .theme-choice button{transition:none}
+.theme-settings{padding-bottom:20px}
+.theme-choice{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.theme-choice button{padding:14px;text-align:left;border:1px solid #1c1c1c;border-radius:14px;background:#080808;color:#aaa;cursor:pointer;transition:border-color .16s,background .16s,color .16s}
+.theme-choice button b{display:block;color:#ddd;font-size:13px;margin-bottom:5px}
+.theme-choice button small{display:block;color:#666;font-size:11px;line-height:1.45}
+.theme-choice button.selected{background:#161616;border-color:#fff;color:#fff}
+.theme-choice button.selected b{color:#fff}
+@media(max-width:560px){.theme-choice{grid-template-columns:1fr}}
