@@ -44,6 +44,30 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Apply VYRA Android icon
+        run: |
+          set -e
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/vyra_logo.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="128" android:viewportHeight="128">
+              <path android:fillColor="#FFFFFFFF" android:pathData="M20,40.5 L48.7,20 A17,17 0,0 1,68.9,20.4 L108.3,49.2 A17,17 0,0 1,115,62.8 L115,84.2 L82.2,63.5 L45.6,91.1 L20,75.3 Z"/>
+              <path android:fillColor="#FFFFFFFF" android:pathData="M19.8,40.5 L51.2,18 A16.8,16.8 0,0 1,70.4,18 L108.1,45.4 L94.4,55.3 L61.7,31.7 A4.6,4.6 0,0 0,56.3,31.6 L30.4,50.8 Z"/>
+              <path android:fillColor="#FFFFFFFF" android:pathData="M20,75.2 L45.8,91 L84.3,61.8 L98,71.7 L59.2,101.3 A16.8,16.8 0,0 1,39.1,101.5 L20,91 Z"/>
+              <path android:fillColor="#FF000000" android:pathData="M64,43 L67.8,56.2 L81,60 L67.8,63.8 L64,77 L60.2,63.8 L47,60 L60.2,56.2 Z"/>
+          </vector>
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("android/app/src/main/AndroidManifest.xml")
+          s=p.read_text()
+          import re
+          s=re.sub(r'android:icon="[^"]+"', 'android:icon="@drawable/vyra_logo"', s, count=1)
+          s=re.sub(r'android:roundIcon="[^"]+"', 'android:roundIcon="@drawable/vyra_logo"', s, count=1)
+          p.write_text(s)
+          PY
+
       - name: Configure Android SDK
         run: |
           set -e
