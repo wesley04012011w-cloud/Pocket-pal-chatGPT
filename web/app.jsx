@@ -33,19 +33,29 @@ function renderMarkdown(src='',flash=[]){
  return html;
 }
 function markLastText(html,trail=[]){
- if(!trail?.length)return html;
- let core=html,suffix='';
- const closeRe=/<\/(?:p|li|td|th|strong|em|code|blockquote|h[1-6]|div|table|thead|tbody|tr)>\s*$/i;
- while(closeRe.test(core)){const m=core.match(closeRe)[0];core=core.slice(0,-m.length);suffix=m+suffix}
- const gt=core.lastIndexOf('>');
- const text=gt>=0?core.slice(gt+1):core;
- if(!text)return html;
- const units=[];for(let i=0;i<text.length;){if(text[i]==='&'){const m=text.slice(i).match(/^&(#[0-9]+|#x[0-9a-f]+|[a-z]+);/i);if(m){units.push(text.slice(i,i+m[0].length));i+=m[0].length;continue}}units.push(text[i]);i++}
- const n=Math.min(trail.length,units.length);if(!n)return html;
- let marked=text.slice(0,units.slice(0,units.length-n).reduce((a,x)=>a+x.length,0));
- const recent=units.slice(-n);
- const spans=recent.map((unit,i)=>{const age=Math.max(0,trail[trail.length-n+i]?.age||0);return '<span class="generation-flash" style="animation-delay:-'+age+'ms">'+unit+'</span>'}).join('');
- return core.slice(0,gt+1)+marked+spans+suffix;
+ if(!trail?.length||typeof document==='undefined')return html;
+ const template=document.createElement('template');
+ template.innerHTML=html;
+ const walker=document.createTreeWalker(template.content,NodeFilter.SHOW_TEXT);
+ const nodes=[];let node;
+ while(node=walker.nextNode())if(node.data)nodes.push(node);
+ let remaining=Math.min(trail.length,STREAM_TRAIL_MAX);
+ for(let ni=nodes.length-1;ni>=0&&remaining>0;ni--){
+   const textNode=nodes[ni];
+   const count=Math.min(remaining,textNode.data.length);
+   for(let i=textNode.data.length-1;i>=textNode.data.length-count;i--){
+     const tail=textNode.splitText(i);
+     const rest=tail.splitText(1);
+     const span=document.createElement('span');
+     span.className='generation-flash';
+     const age=Math.max(0,trail[trail.length-remaining]?.age||0);
+     span.style.animationDelay='-'+age+'ms';
+     tail.parentNode.replaceChild(span,tail);
+     textNode.data=textNode.data.slice(0,i);
+     remaining--;
+   }
+ }
+ return template.innerHTML;
 }
 function Markdown({text='',flash='',trail=[]}){return <div className="markdown" dangerouslySetInnerHTML={{__html:renderMarkdown(text,trail)}}/>}
 function parseThinking(s){const tags=[['<think>','</think>'],['<thinking>','</thinking>'],['<|thinking|>','<|end_thinking|>'],['<|begin_of_thought|>','<|end_of_thought|>'],['<|begin_of_thinking|>','<|end_of_thinking|>'],['<｜begin▁of▁thinking｜>','<｜end▁of▁thinking｜>']];let best=-1,o='',c='';for(const[a,b]of tags){const i=s.indexOf(a);if(i>=0&&(best<0||i<best)){best=i;o=a;c=b}}if(best>=0){const st=best+o.length,e=s.indexOf(c,st);if(e>=0)return{thinking:s.slice(st,e).trim(),answer:s.slice(e+c.length).trim(),active:false};return{thinking:s.slice(st).trim(),answer:'',active:true}}for(const[a,b]of tags){const e=s.indexOf(b);if(e>=0)return{thinking:s.slice(0,e).trim(),answer:s.slice(e+b.length).trim(),active:false}}return{thinking:'',answer:s,active:false}}
@@ -64,14 +74,20 @@ function App(){
  const [generating,setGenerating]=useState(false),[stream,setStream]=useState({answer:'',thinking:'',thinkingLive:false,stats:'',flash:'',flashKey:0});
  const messagesRef=useRef(null),thinkingRef=useRef(null);
  const [input,setInput]=useState(''),[downloaded,setDownloaded]=useState([]),[downloading,setDownloading]=useState(null);
- const genRef=useRef({count:0,start:0,raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[]});
+ const genRef=useRef({count:0,start:0,raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[],modelDone:false,finishAt:0,thinkingFinal:''});
  const genLiveRef=useRef(false),chatIdRef=useRef(chatId),streamRef=useRef(stream),rafRef=useRef(null);
  const current=useMemo(()=>chats.find(c=>c.id===chatId)||chats[0],[chats,chatId]);
  useEffect(()=>{chatIdRef.current=chatId},[chatId]);useEffect(()=>{streamRef.current=stream},[stream]);
+ const scrollRafRef=useRef(null);
  useEffect(()=>{
    const el=messagesRef.current;if(!el)return;
-   const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<220;
-   if(nearBottom||generating)el.scrollTo({top:el.scrollHeight,behavior:'smooth'});
+   const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<260;
+   if(!(nearBottom||generating))return;
+   if(scrollRafRef.current)return;
+   scrollRafRef.current=requestAnimationFrame(()=>{
+     scrollRafRef.current=null;
+     el.scrollTop=el.scrollHeight;
+   });
  },[current?.messages?.length,stream.answer,generating,chatId]);
  useEffect(()=>{
    const el=thinkingRef.current;if(!el)return;
@@ -84,45 +100,59 @@ function App(){
  useEffect(()=>{if(screen==='models')refreshModels()},[screen,refreshModels]);
 
  const commitStream=useCallback(()=>{const s=streamRef.current;patchCurrent(c=>{const messages=c.messages.slice();const last=messages[messages.length-1];if(!last)return c;messages[messages.length-1]={...last,content:s.answer,thinking:s.thinking};return{...c,messages}})},[patchCurrent]);
- const scheduleCommit=useCallback(()=>{if(rafRef.current)return;rafRef.current=requestAnimationFrame(()=>{rafRef.current=null;commitStream()})},[commitStream]);
+ const scheduleCommit=useCallback(()=>{},[]);
 
  useEffect(()=>{
+   const finish=()=>{
+     const g=genRef.current;
+     if(!g.modelDone||g.visibleAnswer.length<g.targetAnswer.length)return;
+     g.trail=[];
+     const elapsed=Math.max(.001,(performance.now()-g.start)/1000);
+     const final={answer:g.targetAnswer,thinking:g.thinkingFinal||streamRef.current.thinking,thinkingLive:false,flash:'',trail:[],stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
+     streamRef.current=final;setStream(final);commitStream();
+     genLiveRef.current=false;setGenerating(false);
+   };
    const tick=()=>{
      const g=genRef.current;
      if(!genLiveRef.current)return;
+     const now=performance.now();
      if(g.visibleAnswer.length<g.targetAnswer.length){
        const nextChar=g.targetAnswer[g.visibleAnswer.length];
        g.visibleAnswer+=nextChar;
-       const now=performance.now();g.trail.push({time:now});g.trail=g.trail.filter(x=>now-x.time<500).slice(-40);
-       const elapsed=Math.max(.001,(now-g.start)/1000);
-       const next={answer:g.visibleAnswer,thinking:streamRef.current.thinking,thinkingLive:streamRef.current.thinkingLive,flash:nextChar,trail:g.trail.map((x,i)=>({age:Math.min(500,Math.max(0,now-(x.time||now)))})),stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
-       streamRef.current=next;setStream(next);scheduleCommit();
+       g.trail.push({time:now});
      }
-     if(g.visibleAnswer.length<g.targetAnswer.length||genLiveRef.current)g.timer=setTimeout(tick,18);
+     g.trail=g.trail.filter(x=>now-x.time<STREAM_TRAIL_MS).slice(-STREAM_TRAIL_MAX);
+     const elapsed=Math.max(.001,(now-g.start)/1000);
+     const next={answer:g.visibleAnswer,thinking:g.thinkingFinal||streamRef.current.thinking,thinkingLive:g.modelDone?false:streamRef.current.thinkingLive,flash:'',trail:g.trail.map(x=>({age:Math.min(STREAM_TRAIL_MS,Math.max(0,now-x.time))})),stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
+     streamRef.current=next;setStream(next);
+     if(g.visibleAnswer.length>=g.targetAnswer.length){
+       if(g.modelDone){
+         if(!g.finishAt)g.finishAt=now+STREAM_TRAIL_MS;
+         if(now>=g.finishAt){finish();return}
+       }
+     }
+     g.timer=setTimeout(tick,STREAM_CHAR_MS);
    };
    const tokenListener=Llama.addListener('token',ev=>{
      if(!ev?.text)return;
      const g=genRef.current;g.count++;g.raw+=ev.text;
-     const p=parseThinking(g.raw);g.targetAnswer=p.answer;
+     const p=parseThinking(g.raw);g.targetAnswer=p.answer;g.thinkingFinal=p.thinking;
      const elapsed=Math.max(.001,(performance.now()-g.start)/1000);
-     const now=performance.now();g.trail=g.trail.filter(x=>now-x.time<500);const next={answer:g.visibleAnswer,thinking:p.thinking,thinkingLive:p.active,flash:'',trail:g.trail.map(x=>({age:Math.min(500,now-x.time)})),stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
+     const next={answer:g.visibleAnswer,thinking:p.thinking,thinkingLive:p.active,flash:'',trail:g.trail.map(x=>({age:Math.min(STREAM_TRAIL_MS,Math.max(0,performance.now()-x.time))})),stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
      streamRef.current=next;setStream(next);
      if(!g.timer)g.timer=setTimeout(tick,0);
    });
    const doneListener=Llama.addListener('generationDone',()=>{
-     const g=genRef.current,p=parseThinking(g.raw);g.targetAnswer=p.answer;
-     if(g.timer){clearTimeout(g.timer);g.timer=null}
-     g.visibleAnswer=g.targetAnswer;
-     const elapsed=Math.max(.001,(performance.now()-g.start)/1000);
-     const next={answer:g.targetAnswer,thinking:p.thinking,thinkingLive:false,flash:'',trail:[],stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
-     streamRef.current=next;setStream(next);commitStream();setGenerating(false);genLiveRef.current=false;
+     const g=genRef.current,p=parseThinking(g.raw);g.targetAnswer=p.answer;g.thinkingFinal=p.thinking;g.modelDone=true;
+     if(!g.timer)g.timer=setTimeout(tick,0);
+     else if(g.visibleAnswer>=g.targetAnswer.length&&g.targetAnswer.length===0){g.finishAt=performance.now()+STREAM_TRAIL_MS}
    });
-   return()=>{tokenListener.then(x=>x.remove());doneListener.then(x=>x.remove());if(rafRef.current)cancelAnimationFrame(rafRef.current);if(genRef.current.timer)clearTimeout(genRef.current.timer)}
- },[commitStream,scheduleCommit]);
+   return()=>{tokenListener.then(x=>x.remove());doneListener.then(x=>x.remove());if(genRef.current.timer)clearTimeout(genRef.current.timer);if(scrollRafRef.current)cancelAnimationFrame(scrollRafRef.current)}
+ },[commitStream]);
 
  async function loadPath(path,name){try{const r=await Llama.loadModel({path,...engineCfg});if(r.ok){const n=name||path.split('/').pop();setModel(n);localStorage.setItem('pp_model',n);localStorage.setItem('pp_model_path',path);setScreen('chat')}}catch(e){console.error(e);alert('Model load error. Export Logs for diagnosis.')}}
  async function pickAndLoad(){try{const p=await Llama.pickModel();if(p?.path)await loadPath(p.path,p.name||p.path.split('/').pop())}catch(e){console.error(e);alert('Could not load the model.')}} 
- async function send(){if(genLiveRef.current)return;const text=input.trim();if(!text)return;if(!model){setScreen('models');return}const title=current.title==='New chat'?text.slice(0,42):current.title;const msgs=[...current.messages,{role:'user',content:text},{role:'assistant',content:'',thinking:''}];setChats(prev=>prev.map(c=>c.id===current.id?{...c,title,messages:msgs}:c));setInput('');const g={count:0,start:performance.now(),raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[]};genRef.current=g;const empty={answer:'',thinking:'',thinkingLive:false,flash:'',flashKey:0,stats:'0 tokens · 0.0 tok/s'};streamRef.current=empty;setStream(empty);setGenerating(true);genLiveRef.current=true;try{await Llama.generate({roles:msgs.slice(0,-1).map(x=>x.role),contents:msgs.slice(0,-1).map(x=>x.content),...chatCfg})}catch(e){console.error(e);setGenerating(false);genLiveRef.current=false;commitStream()}}
+ async function send(){if(genLiveRef.current)return;const text=input.trim();if(!text)return;if(!model){setScreen('models');return}const title=current.title==='New chat'?text.slice(0,42):current.title;const msgs=[...current.messages,{role:'user',content:text},{role:'assistant',content:'',thinking:''}];setChats(prev=>prev.map(c=>c.id===current.id?{...c,title,messages:msgs}:c));setInput('');const g={count:0,start:performance.now(),raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[],modelDone:false,finishAt:0,thinkingFinal:''};genRef.current=g;const empty={answer:'',thinking:'',thinkingLive:false,flash:'',flashKey:0,stats:'0 tokens · 0.0 tok/s'};streamRef.current=empty;setStream(empty);setGenerating(true);genLiveRef.current=true;try{await Llama.generate({roles:msgs.slice(0,-1).map(x=>x.role),contents:msgs.slice(0,-1).map(x=>x.content),...chatCfg})}catch(e){console.error(e);setGenerating(false);genLiveRef.current=false;commitStream()}}
  async function pickText(){try{const r=await Llama.pickText();if(r?.text){setAttachment({name:r.name||'text.txt',text:r.text});setInput(prev=>prev?'[Arquivo: '+(r.name||'text.txt')+']\n'+r.text:r.text)}}catch(e){console.error(e);alert('Could not read the TXT file.')}}
  function newChat(){const c=makeChat();setChats(p=>[c,...p]);setChatId(c.id);setScreen('chat');setDrawer(false);setInput('');setStream({answer:'',thinking:'',thinkingLive:false,flash:'',stats:''})}
  async function unload(){try{await Llama.unloadModel()}finally{setModel('');localStorage.removeItem('pp_model');localStorage.removeItem('pp_model_path');refreshModels()}}
