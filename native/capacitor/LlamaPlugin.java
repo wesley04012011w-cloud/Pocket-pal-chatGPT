@@ -95,7 +95,7 @@ public class LlamaPlugin extends Plugin {
       File out=new File(dir,name),tmp=new File(dir,name+".part");HttpURLConnection c=null;
       try{
         Diagnostic.log("MODEL download start name="+name+" url="+url);
-        c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(20000);c.setReadTimeout(30000);c.setInstanceFollowRedirects(true);c.setRequestProperty("User-Agent","PocketPal Local");c.connect();
+        c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(20000);c.setReadTimeout(30000);c.setInstanceFollowRedirects(true);c.setRequestProperty("User-Agent","PocketPal Local");c.setRequestProperty("Accept-Encoding","identity");c.connect();
         int code=c.getResponseCode();if(code<200||code>=300)throw new java.io.IOException("HTTP "+code);
         long total=c.getContentLengthLong(),done=0,last=-1;
         try(InputStream in=c.getInputStream();FileOutputStream fos=new FileOutputStream(tmp)){
