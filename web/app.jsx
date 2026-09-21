@@ -70,6 +70,7 @@ function App(){
  const [chats,setChats]=useState(seedRef.current),[chatId,setChatId]=useState(seedRef.current[0].id);
  const [model,setModel]=useState('');
  const [engineCfg,setEngineCfg]=useState(()=>({...DEFAULT_ENGINE,...readJSON('pp_engine_settings',{})}));
+ const [uiTheme,setUiTheme]=useState(()=>localStorage.getItem('pp_ui_theme')||'vyra');
  const [chatCfg,setChatCfg]=useState(()=>({...DEFAULT_CHAT,...readJSON('pp_chat_settings',{})}));
  const [drawer,setDrawer]=useState(false),[screen,setScreen]=useState('chat'),[settingsOpen,setSettingsOpen]=useState(false),[chatSettingsOpen,setChatSettingsOpen]=useState(false),[loading,setLoading]=useState(true),[attachment,setAttachment]=useState(null);
  const [generating,setGenerating]=useState(false),[stream,setStream]=useState({answer:'',thinking:'',thinkingLive:false,stats:'',flash:'',flashKey:0});
@@ -84,13 +85,13 @@ function App(){
  useEffect(()=>{
    const el=messagesRef.current;if(!el)return;
    const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<220;
-   if(nearBottom||generating)el.scrollTo({top:el.scrollHeight,behavior:'smooth'});
+   if(nearBottom||generating)el.scrollTop=el.scrollHeight;
  },[current?.messages?.length,stream.answer,generating,chatId]);
  useEffect(()=>{
    const el=thinkingRef.current;if(!el)return;
    el.scrollTop=el.scrollHeight;
  },[stream.thinking]);
- useEffect(()=>{localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_engine_settings',JSON.stringify(engineCfg));localStorage.setItem('pp_chat_settings',JSON.stringify(chatCfg))},[chats,engineCfg,chatCfg]);
+ useEffect(()=>{localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_engine_settings',JSON.stringify(engineCfg));localStorage.setItem('pp_chat_settings',JSON.stringify(chatCfg));localStorage.setItem('pp_ui_theme',uiTheme)},[chats,engineCfg,chatCfg,uiTheme]);
  useEffect(()=>{const t=setTimeout(()=>setLoading(false),520);return()=>clearTimeout(t)},[]);
  const patchCurrent=useCallback(fn=>setChats(prev=>prev.map(c=>c.id===chatIdRef.current?fn(c):c)),[]);
  const refreshModels=useCallback(async()=>{try{const r=await Llama.listModels();setDownloaded(r?.models||[])}catch{}},[]);
@@ -154,7 +155,7 @@ function App(){
 
  if(loading)return <Splash/>;
 
- return <div className="app">
+ return <div className={'app theme-'+uiTheme}>
   <div className={'scrim '+(drawer?'open':'')} onClick={()=>setDrawer(false)}/>
   <aside className={'drawer '+(drawer?'open':'')}>
    <div className="brand"><b>VYRA</b><span>Local AI assistant</span></div>
@@ -177,7 +178,7 @@ function App(){
     <div className="composer"><div className="input-row"><button className="icon" onClick={pickText} aria-label="Attach TXT file"><Icon name="plus"/></button><textarea className="input" rows="1" value={input} onChange={e=>{setInput(e.target.value);e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,145)+'px'}} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}}} placeholder="Ask assistant..."/><button className={'send '+(generating?'stop':'')} onClick={()=>generating?Llama.stop():send()} aria-label={generating?'Stop':'Send'}><Icon name={generating?'stop':'send'}/></button></div><div className="meta stats">{stream.stats}</div></div>
    </div>
   </main>}
-  {settingsOpen&&<EngineSettings cfg={engineCfg} onClose={()=>setSettingsOpen(false)} onApply={next=>{setEngineCfg(next);setSettingsOpen(false)}} onLogs={()=>Llama.exportLog()}/>} {chatSettingsOpen&&<ChatSettings cfg={chatCfg} onClose={()=>setChatSettingsOpen(false)} onApply={next=>{setChatCfg(next);setChatSettingsOpen(false)}}/>}
+  {settingsOpen&&<EngineSettings cfg={engineCfg} theme={uiTheme} onThemeChange={setUiTheme} onClose={()=>setSettingsOpen(false)} onApply={next=>{setEngineCfg(next);setSettingsOpen(false)}} onLogs={()=>Llama.exportLog()}/>} {chatSettingsOpen&&<ChatSettings cfg={chatCfg} onClose={()=>setChatSettingsOpen(false)} onApply={next=>{setChatCfg(next);setChatSettingsOpen(false)}}/>}
  </div>
 }
 
@@ -210,10 +211,13 @@ function ChatSettings({cfg,onClose,onApply}){
  <footer className="settings-footer"><button onClick={onClose}>Cancel</button><button className="primary" onClick={()=>onApply(v)}>Apply changes</button></footer></div>
 }
 
-function EngineSettings({cfg,onClose,onApply,onLogs}){
+function EngineSettings({cfg,theme,onThemeChange,onClose,onApply,onLogs}){
  const [v,setV]=useState({...cfg});
  return <div className="settings-page"><header className="settings-head"><button className="float-btn" onClick={onClose}><Icon name="back"/></button><div><b>Settings</b><small>Engine, memory and CPU</small></div></header>
  <div className="settings-content">
+  <section className="settings-section theme-settings"><h3>Interface</h3>
+   <div className="theme-choice"><button className={theme==='chat'?'selected':''} onClick={()=>onThemeChange('chat')}><b>Chat</b><small>Lightweight. No blur, animated background or decorative effects.</small></button><button className={theme==='vyra'?'selected':''} onClick={()=>onThemeChange('vyra')}><b>VYRA</b><small>Full visual style, glow, blur and interface animations.</small></button></div>
+  </section>
   <section className="settings-section"><h3>Engine</h3>
    <div className="slider-field"><label>Context / KV cache <b>{v.context}</b></label><Range value={v.context} min={512} max={8192} step={512} onChange={x=>setV({...v,context:x})}/></div>
    <div className="slider-field"><label>Generation cores <b>{v.threads}</b></label><Range value={v.threads} min={1} max={8} step={1} onChange={x=>setV({...v,threads:x})}/></div>
