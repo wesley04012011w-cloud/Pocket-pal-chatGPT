@@ -39,20 +39,20 @@ function markLastText(html,trail=[]){
  const walker=document.createTreeWalker(template.content,NodeFilter.SHOW_TEXT);
  const nodes=[];let node;
  while(node=walker.nextNode())if(node.data)nodes.push(node);
- let remaining=Math.min(trail.length,STREAM_TRAIL_MAX);
+ let remaining=Math.min(trail.length,STREAM_TRAIL_MAX),applied=0;
  for(let ni=nodes.length-1;ni>=0&&remaining>0;ni--){
    const textNode=nodes[ni];
    const count=Math.min(remaining,textNode.data.length);
    for(let i=textNode.data.length-1;i>=textNode.data.length-count;i--){
      const tail=textNode.splitText(i);
-     const rest=tail.splitText(1);
+     tail.splitText(1);
      const span=document.createElement('span');
      span.className='generation-flash';
-     const age=Math.max(0,trail[trail.length-remaining]?.age||0);
+     const age=Math.max(0,trail[trail.length-1-applied]?.age||0);
      span.style.animationDelay='-'+age+'ms';
      tail.parentNode.replaceChild(span,tail);
      textNode.data=textNode.data.slice(0,i);
-     remaining--;
+     remaining--;applied++;
    }
  }
  return template.innerHTML;
