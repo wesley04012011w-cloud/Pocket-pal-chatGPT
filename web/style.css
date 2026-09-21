@@ -45,6 +45,40 @@ body{overflow:hidden}button,input,textarea{font:inherit}button{-webkit-appearanc
 .theme-chat .thinking{box-shadow:none}
 .theme-chat .theme-choice button{transition:none}
 .theme-settings{padding-bottom:20px}
+.theme-immersive{--bg:#0d1117;--panel:#151b24;--panel2:#1b2430;--text:#e8edf5;--muted:#8d99aa;--line:rgba(157,177,204,.16);--soft:rgba(90,130,180,.10);--accent:#8eb8e8}
+.theme-immersive .shell{background:radial-gradient(900px 500px at 50% -10%,rgba(49,91,137,.22),transparent 65%),#0d1117}
+.theme-immersive .stars{opacity:.28;animation:none}
+.theme-immersive .stars:before,.theme-immersive .stars:after{animation:none;opacity:.12}
+.theme-immersive .floating-top .float-btn,.theme-immersive .float-model{background:rgba(22,29,39,.88);border-color:rgba(139,174,211,.18);box-shadow:0 8px 28px rgba(0,0,0,.22);backdrop-filter:blur(10px)}
+.theme-immersive .float-model{color:#91a7bd}
+.theme-immersive .messages{background:transparent}
+.theme-immersive .message-row{border-bottom-color:rgba(157,177,204,.09)}
+.theme-immersive .message-role{color:#718197}
+.theme-immersive .message-content{color:#d5deea}
+.theme-immersive .message-row.user .message-content{color:#edf4fc}
+.theme-immersive .empty-mark{background:#151c26;border-color:rgba(139,174,211,.18)}
+.theme-immersive .suggestions button{background:#141b25;border-color:#273646;color:#aebdce}
+.theme-immersive .suggestions button:hover{background:#1a2532;border-color:#3b5975;color:#e5edf6}
+.theme-immersive .composer-wrap{background:linear-gradient(transparent,rgba(13,17,23,.97) 38%)}
+.theme-immersive .composer{background:rgba(20,27,37,.94);border-color:rgba(139,174,211,.18);box-shadow:0 16px 50px rgba(0,0,0,.3);backdrop-filter:blur(12px)}
+.theme-immersive .input{color:#e7eef7}
+.theme-immersive .input::placeholder{color:#718095}
+.theme-immersive .send{background:#dbeaf8;color:#182534;border-color:#b9d4ed}
+.theme-immersive .send.stop{background:#263545;color:#dbe8f5;border-color:#3b526b}
+.theme-immersive .thinking{background:#151d27;border-color:rgba(139,174,211,.16);box-shadow:0 12px 35px rgba(0,0,0,.22)}
+.theme-immersive .brain{background:#223143;color:#a9c8e7}
+.theme-immersive .thinking-body{color:#8fa3b8}
+.theme-immersive .markdown h1,.theme-immersive .markdown h2,.theme-immersive .markdown h3,.theme-immersive .markdown h4{color:#edf4fb}
+.theme-immersive .markdown blockquote{background:#151d27;border-left-color:#587da3;color:#9cafc2}
+.theme-immersive .markdown code{background:#1b2531;color:#dbe8f4}
+.theme-immersive .markdown pre{background:#101720;border-color:#263544}
+.theme-immersive .markdown a{color:#a9d0f4}
+.theme-immersive .md-table-wrap{border-color:#263646}
+.theme-immersive .markdown th{background:#1b2633;color:#e5eef7}
+.theme-immersive .markdown td{color:#c3cfdb;border-color:#263646}
+.theme-immersive .model-btn,.theme-immersive .load,.theme-immersive .import-model{background:#dcebf8;color:#182534}
+.theme-immersive .theme-choice button.selected{background:#203044;border-color:#8eb8e8}
+.theme-immersive .theme-choice button.selected b{color:#edf5fc}
 .theme-choice{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .theme-choice button{padding:14px;text-align:left;border:1px solid #1c1c1c;border-radius:14px;background:#080808;color:#aaa;cursor:pointer;transition:border-color .16s,background .16s,color .16s}
 .theme-choice button b{display:block;color:#ddd;font-size:13px;margin-bottom:5px}
