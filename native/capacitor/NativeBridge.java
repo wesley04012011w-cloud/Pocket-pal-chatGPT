@@ -4,7 +4,7 @@ public final class NativeBridge {
   static{System.loadLibrary("pocketpal_local");}
   private NativeBridge(){}
   public interface TokenCallback{void emit(String text,boolean done);}
-  public static native boolean nativeLoad(String path,int nctx,int threads,int batchThreads,int batch,boolean flash,boolean mmap,boolean mlock,boolean offloadKQV);
+  public static native boolean nativeLoad(String path,int nctx,int threads,int batchThreads,int batch,boolean flash,boolean mmap,boolean mlock,boolean offloadKQV,String kvCacheType);
   public static native void nativeStop();
   public static native void nativeFree();
   public static native void nativeSetLogPath(String path);
