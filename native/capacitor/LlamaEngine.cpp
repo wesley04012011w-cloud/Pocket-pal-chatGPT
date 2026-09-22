@@ -94,6 +94,7 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
             reasoning.start=formatted.thinking_start_tag;
             reasoning.ends=formatted.thinking_end_tags;
             reasoning.active=reasoning.enabled&&(reasoning.start.empty()||(!formatted.generation_prompt.empty()&&formatted.generation_prompt.size()>=reasoning.start.size()&&formatted.generation_prompt.rfind(reasoning.start)==formatted.generation_prompt.size()-reasoning.start.size()));
+            std::string utf8Pending;
             auto feedReasoning=[&](const std::string&piece)->bool{
               if(!reasoning.enabled)return emit(e,cb,mid,piece,utf8Pending,false);
               reasoning.pending+=piece;
@@ -103,7 +104,7 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
                   reasoning.pending.clear();return true;
                 }
                 if(!reasoning.active){
-                  const size_t p=reasoning.pending.find(reasoning.start);
+                  const size_t p=reasoning.start.empty()?std::string::npos:reasoning.pending.find(reasoning.start);
                   if(p==std::string::npos){
                     const size_t keep=reasoning.start.empty()?0:reasoning.start.size()-1;
                     if(reasoning.pending.size()>keep){
@@ -133,7 +134,7 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
                 return true;
               }
             };
-            EndReason reason=EndReason::LIMIT;std::string utf8Pending;
+            EndReason reason=EndReason::LIMIT;
             for(int step=0;step<std::max(1,(int)maxTok);step++){
               if(g_stop){reason=EndReason::STOP;break;}
               llama_token tok=common_sampler_sample(smp,g_ctx,-1);
