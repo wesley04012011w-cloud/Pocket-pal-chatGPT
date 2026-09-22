@@ -93,7 +93,7 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
             reasoning.enabled=enableThinking&&formatted.supports_thinking&&!formatted.thinking_end_tags.empty();
             reasoning.start=formatted.thinking_start_tag;
             reasoning.ends=formatted.thinking_end_tags;
-            reasoning.active=reasoning.enabled&&reasoning.start.empty();
+            reasoning.active=reasoning.enabled&&(reasoning.start.empty()||(!formatted.generation_prompt.empty()&&formatted.generation_prompt.size()>=reasoning.start.size()&&formatted.generation_prompt.rfind(reasoning.start)==formatted.generation_prompt.size()-reasoning.start.size()));
             auto feedReasoning=[&](const std::string&piece)->bool{
               if(!reasoning.enabled)return emit(e,cb,mid,piece,utf8Pending,false);
               reasoning.pending+=piece;
