@@ -25,7 +25,7 @@ function renderMarkdown(src='',flash=0){
   if(/^#{1,6}\s/.test(line)){const m=line.match(/^(#{1,6})\s+(.*)$/);out.push('<h'+m[1].length+'>'+inline(m[2])+'</h'+m[1].length+'>');continue}
   if(/^\s*>/.test(line)){out.push('<blockquote>'+inline(line.replace(/^\s*>\s?/,'') )+'</blockquote>');continue}
   if(/^\s*[-*+]\s+/.test(line)){let a=[];while(i<lines.length&&/^\s*[-*+]\s+/.test(lines[i])){a.push('<li>'+inline(lines[i].replace(/^\s*[-*+]\s+/,''))+'</li>');i++}i--;out.push('<ul>'+a.join('')+'</ul>');continue}
-  if(/^\s*\d+[.)]\s+/.test(line)){let a=[];while(i<lines.length){if(/^\s*\d+[.)]\s+/.test(lines[i])){a.push('<li>'+inline(lines[i].replace(/^\s*\d+[.)]\s+/,''))+'</li>');i++;continue}if(!lines[i].trim()&&i+1<lines.length&&/^\s*\d+[.)]\s+/.test(lines[i+1])){i++;continue}break}i--;out.push('<ol>'+a.join('')+'</ol>');continue}
+  if(/^\s*\d+[.)](?:\s+.*)?$/.test(line)){const first=line.match(/^\s*(\d+)[.)]/);let a=[];const start=first?Number(first[1]):1;while(i<lines.length){const m=lines[i].match(/^\s*\d+[.)](?:\s+.*)?$/);if(m){a.push('<li>'+inline(lines[i].replace(/^\s*\d+[.)]\s*/,''))+'</li>');i++;continue}if(!lines[i].trim()&&i+1<lines.length&&/^\s*\d+[.)](?:\s+.*)?$/.test(lines[i+1])){i++;continue}break}i--;out.push('<ol'+(start!==1?' start="'+start+'"':'')+'>'+a.join('')+'</ol>');continue}
   if(!line.trim()){out.push('<br>');continue}out.push('<p>'+inline(line)+'</p>');
  }
  if(inCode)out.push('<div class="md-code-wrap"><button class="md-code-copy" type="button" data-copy-code="'+escapeHtml(code.join('\\n'))+'">Copy</button><pre><code>'+escapeHtml(code.join('\n'))+'</code></pre></div>');
@@ -76,7 +76,7 @@ function App(){
  const [chatCfg,setChatCfg]=useState(()=>({...DEFAULT_CHAT,...readJSON('pp_chat_settings',{})}));
  const [drawer,setDrawer]=useState(false),[screen,setScreen]=useState('chat'),[settingsOpen,setSettingsOpen]=useState(false),[chatSettingsOpen,setChatSettingsOpen]=useState(false),[loading,setLoading]=useState(true),[attachment,setAttachment]=useState(null);
  const [generating,setGenerating]=useState(false),[stream,setStream]=useState({answer:'',thinking:'',thinkingLive:false,stats:'',flash:'',flashKey:0});
- const messagesRef=useRef(null),thinkingRef=useRef(null);
+ const messagesRef=useRef(null),thinkingRef=useRef(null),scrollFollowRef=useRef(true);
  const [input,setInput]=useState(''),[downloaded,setDownloaded]=useState([]),[downloading,setDownloading]=useState(null),[downloadProgress,setDownloadProgress]=useState(null),[loadingModel,setLoadingModel]=useState('');
  const genRef=useRef({count:0,start:0,raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[]});
  const genLiveRef=useRef(false),chatIdRef=useRef(chatId),streamRef=useRef(stream),rafRef=useRef(null);
@@ -86,9 +86,19 @@ function App(){
  useEffect(()=>{const p=Llama.addListener('downloadProgress',ev=>{setDownloadProgress({name:ev?.name||'',bytes:Number(ev?.bytes)||0,total:Number(ev?.total)||0,percent:Number(ev?.percent)||-1})});return()=>{p.then(x=>x.remove())}},[]);
  useEffect(()=>{
    const el=messagesRef.current;if(!el)return;
-   const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<220;
-   if(nearBottom||generating)el.scrollTop=el.scrollHeight;
- },[current?.messages?.length,stream.answer,generating,chatId]);
+   const updateFollow=()=>{
+     const distance=el.scrollHeight-el.scrollTop-el.clientHeight;
+     scrollFollowRef.current=distance<=120;
+   };
+   updateFollow();
+   el.addEventListener('scroll',updateFollow,{passive:true});
+   return()=>el.removeEventListener('scroll',updateFollow);
+ },[chatId]);
+
+ useEffect(()=>{
+   const el=messagesRef.current;if(!el||!scrollFollowRef.current)return;
+   el.scrollTop=el.scrollHeight;
+ },[current?.messages?.length,stream.answer,chatId]);
  useEffect(()=>{
    const el=thinkingRef.current;if(!el)return;
    el.scrollTop=el.scrollHeight;
@@ -141,7 +151,7 @@ function App(){
  finally{setLoadingModel('')}
 }
  async function pickAndLoad(){try{const p=await Llama.pickModel();if(p?.path)await loadPath(p.path,p.name||p.path.split('/').pop())}catch(e){console.error(e);alert('Could not load the model.')}} 
- async function send(){if(genLiveRef.current)return;const text=input.trim();if(!text)return;if(!model){setScreen('models');return}const title=current.title==='New chat'?text.slice(0,42):current.title;const msgs=[...current.messages,{role:'user',content:text},{role:'assistant',content:'',thinking:''}];setChats(prev=>prev.map(c=>c.id===current.id?{...c,title,messages:msgs}:c));setInput('');const g={count:0,start:performance.now(),raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[]};genRef.current=g;const empty={answer:'',thinking:'',thinkingLive:false,flash:'',flashKey:0,stats:'0 tokens · 0.0 tok/s'};streamRef.current=empty;setStream(empty);setGenerating(true);genLiveRef.current=true;const effectiveSystemPrompt=String(chatCfg.systemPrompt||'').trim()||VYRA_SYSTEM_PROMPT;try{await Llama.generate({roles:msgs.slice(0,-1).map(x=>x.role),contents:msgs.slice(0,-1).map(x=>x.content),...chatCfg,systemPrompt:effectiveSystemPrompt})}catch(e){console.error(e);setGenerating(false);genLiveRef.current=false;commitStream()}}
+ async function send(){if(genLiveRef.current)return;const text=input.trim();if(!text)return;if(!model){setScreen('models');return}const title=current.title==='New chat'?text.slice(0,42):current.title;const msgs=[...current.messages,{role:'user',content:text},{role:'assistant',content:'',thinking:''}];setChats(prev=>prev.map(c=>c.id===current.id?{...c,title,messages:msgs}:c));setInput('');const g={count:0,start:performance.now(),raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[]};genRef.current=g;const empty={answer:'',thinking:'',thinkingLive:false,flash:'',flashKey:0,stats:'0 tokens · 0.0 tok/s'};streamRef.current=empty;setStream(empty);scrollFollowRef.current=true;setGenerating(true);genLiveRef.current=true;const effectiveSystemPrompt=String(chatCfg.systemPrompt||'').trim()||VYRA_SYSTEM_PROMPT;try{await Llama.generate({roles:msgs.slice(0,-1).map(x=>x.role),contents:msgs.slice(0,-1).map(x=>x.content),...chatCfg,systemPrompt:effectiveSystemPrompt})}catch(e){console.error(e);setGenerating(false);genLiveRef.current=false;commitStream()}}
  async function pickText(){try{const r=await Llama.pickText();if(r?.text){setAttachment({name:r.name||'text.txt',text:r.text});setInput(prev=>prev?'[Arquivo: '+(r.name||'text.txt')+']\n'+r.text:r.text)}}catch(e){console.error(e);alert('Could not read the TXT file.')}}
  function newChat(){const c=makeChat();setChats(p=>[c,...p]);setChatId(c.id);setScreen('chat');setDrawer(false);setInput('');setStream({answer:'',thinking:'',thinkingLive:false,flash:'',stats:''})}
  async function unload(){try{await Llama.unloadModel()}finally{setModel('');localStorage.removeItem('pp_model');localStorage.removeItem('pp_model_path');refreshModels()}}
