@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import {registerPlugin} from '@capacitor/core';
 
 const Llama=registerPlugin('Llama');
-const DEFAULT_ENGINE={context:4096,threads:4,batchThreads:4,batch:256,flashAttention:true,mmap:true,mlock:false,offloadKQV:false};
+const DEFAULT_ENGINE={context:4096,threads:4,batchThreads:4,batch:256,flashAttention:true,mmap:true,mlock:false,offloadKQV:false,kvCacheType:"f16"};
 const VYRA_SYSTEM_PROMPT=`You are VYRA, a private local AI assistant running directly on the user's device. Be helpful, clear, honest and practical. Answer naturally and conversationally, adapting your level of detail to the user's request. Do not pretend to have access to the internet, files, apps, sensors or personal data unless they are actually provided to you. If you are unsure, say so rather than inventing facts. Respect the user's instructions and preferences, and prioritize useful answers over unnecessary verbosity. You are an on-device assistant, so never claim that a response came from a remote service when it was generated locally.`;
 const DEFAULT_CHAT={maxTokens:1024,topK:40,temperature:.7,topP:.95,minP:.05,repeatPenalty:1.1,repeatLastN:64,systemPrompt:'',enableThinking:true,useJinja:true};
 const CATALOG=[
@@ -165,10 +165,10 @@ function App(){
     <button className={screen==='chat'?'active':''} onClick={()=>{setScreen('chat');setDrawer(false)}}><Icon name="chat"/>Chats</button>
     <button onClick={newChat}><Icon name="plus"/>New chat</button>
     <button className={screen==='models'?'active':''} onClick={()=>{setScreen('models');setDrawer(false)}}><Icon name="models"/>Models</button>
+    <button className="drawer-settings drawer-settings-top" onClick={openSettings}><Icon name="settings"/><span>Settings</span></button>
    </nav>
    <div className="saved">CONVERSATIONS</div>
    <div className="chat-list">{chats.map(c=><button key={c.id} className={'chat-row '+(c.id===current.id?'active':'')} onClick={()=>{setChatId(c.id);setScreen('chat');setDrawer(false)}}><strong>{c.title}</strong><small>{c.messages.length} messages</small></button>)}</div>
-   <button className="drawer-settings" onClick={openSettings}><Icon name="settings"/><span>Settings</span></button>
   </aside>
 
   {screen==='models'?<ModelsPage downloaded={downloaded} model={model} downloading={downloading} downloadProgress={downloadProgress} loadingModel={loadingModel} onBack={()=>setScreen('chat')} onImport={pickAndLoad} onDownload={download} onLoad={loadPath} onUnload={unload}/>:<main className="shell">
@@ -222,7 +222,9 @@ function EngineSettings({cfg,theme,performanceMode,onPerformanceChange,onThemeCh
    <div className="theme-choice"><button className={theme==='chat'?'selected':''} onClick={()=>onThemeChange('chat')}><b>Chat</b><small>Clean and minimal interface.</small></button><button className={theme==='vyra'?'selected':''} onClick={()=>onThemeChange('vyra')}><b>VYRA</b><small>Full visual style and atmosphere.</small></button><button className={theme==='immersive'?'selected':''} onClick={()=>onThemeChange('immersive')}><b>Immersive</b><small>Gray and blue tones with a calmer atmosphere.</small></button></div>
   </section>
   <section className="settings-section"><h3>Engine</h3>
-   <div className="slider-field"><label>Context / KV cache <b>{v.context}</b></label><Range value={v.context} min={512} max={8192} step={512} onChange={x=>setV({...v,context:x})}/></div>
+   <div className="slider-field"><label>Context size <b>{v.context}</b></label><Range value={v.context} min={512} max={8192} step={512} onChange={x=>setV({...v,context:x})}/></div>
+   <div className="setting-row"><span><b>KV cache precision</b><small>Lower precision uses less RAM. F16 is the safest/default; Q8 and Q4 trade precision for memory.</small></span><select className="setting-select" value={v.kvCacheType||'f16'} onChange={e=>setV({...v,kvCacheType:e.target.value})}><option value="f16">F16 · compatibility</option><option value="q8_0">Q8_0 · lower RAM</option><option value="q4_0">Q4_0 · minimum RAM</option></select></div>
+   <div className="setting-row"><span><b>Model quantization</b><small>The model's Q4/Q5/Q8 quantization comes from the GGUF file itself. Choose a smaller quantized GGUF when available.</small></span><span className="setting-note">GGUF</span></div>
    <div className="slider-field"><label>Generation cores <b>{v.threads}</b></label><Range value={v.threads} min={1} max={8} step={1} onChange={x=>setV({...v,threads:x})}/></div>
    <div className="slider-field"><label>Prompt cores <b>{v.batchThreads}</b></label><Range value={v.batchThreads} min={1} max={8} step={1} onChange={x=>setV({...v,batchThreads:x})}/></div>
    <div className="slider-field"><label>Batch size <b>{v.batch}</b></label><Range value={v.batch} min={32} max={512} step={32} onChange={x=>setV({...v,batch:x})}/></div>
