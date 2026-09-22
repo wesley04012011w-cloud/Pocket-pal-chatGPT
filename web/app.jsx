@@ -60,18 +60,6 @@ function markLastText(html,count=0){
  return parts.join('');
 }
 function Markdown({text='',flash=0}){const ref=useRef(null);useEffect(()=>{const root=ref.current;if(!root)return;const handler=e=>{const btn=e.target.closest('[data-copy-code]');if(!btn||!root.contains(btn))return;const raw=btn.getAttribute('data-copy-code')||'';const value=raw.replace(/\\n/g,'\n');const done=()=>{btn.textContent='Copied';setTimeout(()=>{if(btn.isConnected)btn.textContent='Copy'},1200)};if(navigator.clipboard?.writeText)navigator.clipboard.writeText(value).then(done).catch(()=>{});else{const ta=document.createElement('textarea');ta.value=value;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');done()}catch{}ta.remove()}};root.addEventListener('click',handler);return()=>root.removeEventListener('click',handler)},[text]);return <div ref={ref} className="markdown" dangerouslySetInnerHTML={{__html:renderMarkdown(text,flash)}}/>}
-function parseThinking(s){
- const tags=[['<think>','</think>'],['<thinking>','</thinking>'],['<|thinking|>','<|end_thinking|>'],['<|begin_of_thought|>','<|end_of_thought|>'],['<|begin_of_thinking|>','<|end_of_thinking|>'],['<｜begin▁of▁thinking｜>','<｜end▁of▁thinking｜>']];
- const closeOnly=['</think>','</thinking>','<|end_thinking|>','<|end_of_thought|>','<|end_of_thinking|>','<｜end▁of▁thinking｜>','(/think)','</think>'];
- let best=-1,o='',c='';
- for(const[a,b]of tags){const i=s.indexOf(a);if(i>=0&&(best<0||i<best)){best=i;o=a;c=b}}
- if(best>=0){const st=best+o.length,e=s.indexOf(c,st);if(e>=0)return{thinking:s.slice(st,e).trim(),answer:s.slice(e+c.length).trim(),active:false};return{thinking:s.slice(st).trim(),answer:'',active:true}}
- let end=-1,endTag='';
- for(const tag of closeOnly){const i=s.indexOf(tag);if(i>=0&&(end<0||i<end)){end=i;endTag=tag}}
- if(end>=0){return{thinking:s.slice(0,end).trim(),answer:s.slice(end+endTag.length).trim(),active:false}}
- return{thinking:'',answer:s,active:false}
-}
-
 function Icon({name}){const paths={menu:'M4 7h16M4 12h16M4 17h16',edit:'M4 20l4.5-1L19 8.5 15.5 5 5 15.5 4 20z',more:'M12 6v.01M12 12v.01M12 18v.01',plus:'M12 5v14M5 12h14',send:'M5 12h13M13 6l6 6-6 6',stop:'M7 7h10v10H7z',back:'M15 18l-6-6 6-6',chat:'M5 5h14v10H8l-3 3V5z',models:'M5 7h14M5 12h14M5 17h14',settings:'M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M15.5 12a3.5 3.5 0 1 1-7 0',copy:'M8 8h10v10H8zM6 16H5V5h11v1',log:'M6 4h12v16H6zM9 8h6M9 12h6M9 16h4',upload:'M12 16V5M8 9l4-4 4 4',close:'M6 6l12 12M18 6L6 18',spark:'M12 3l1.7 6.3L20 11l-6.3 1.7L12 19l-1.7-6.3L4 11l6.3-1.7z'};return <svg className="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]||paths.spark}/></svg>}
 
 const MessageRow=memo(function MessageRow({message,streaming=false,flash=0}){const [copied,setCopied]=useState(false);const copy=async()=>{try{await navigator.clipboard.writeText(String(message.content||''));setCopied(true);setTimeout(()=>setCopied(false),1200)}catch{try{const ta=document.createElement('textarea');ta.value=String(message.content||'');document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();setCopied(true);setTimeout(()=>setCopied(false),1200)}catch{}}};return <article className={'message-row '+(message.role==='user'?'user':'assistant')}><div className="message-role">{message.role==='user'?'You':'Assistant'}{message.role==='assistant'&&<button className="copy-message" onClick={copy} aria-label="Copy response"><Icon name="copy"/><span>{copied?'Copied':'Copy'}</span></button>}</div><div className="message-content"><Markdown text={String(message.content||'')} flash={streaming?flash:0}/></div></article>});
@@ -124,28 +112,17 @@ function App(){
  useEffect(()=>{
    const tokenListener=Llama.addListener('token',ev=>{
      if(!ev?.text)return;
-     const g=genRef.current;
-     const before=g.targetAnswer;
+     const g=genRef.current,text=String(ev.text);
      g.count++;
-     g.raw+=ev.text;
-     const p=parseThinking(g.raw);
-     g.targetAnswer=p.answer;
-     const delta=Math.max(0,p.answer.length-before.length);
+     if(ev.thinking)g.thinking=(g.thinking||'')+text;else g.targetAnswer=(g.targetAnswer||'')+text;
      const elapsed=Math.max(.001,(performance.now()-g.start)/1000);
-     const next={answer:p.answer,thinking:p.thinking,thinkingLive:p.active,flash:delta,stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
-     streamRef.current=next;
-     setStream(next);
+     const next={answer:g.targetAnswer||'',thinking:g.thinking||'',thinkingLive:!!ev.thinking,flash:ev.thinking?0:text.length,stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
+     streamRef.current=next;setStream(next);
    });
    const doneListener=Llama.addListener('generationDone',()=>{
-     const g=genRef.current;
-     const p=parseThinking(g.raw);
-     const elapsed=Math.max(.001,(performance.now()-g.start)/1000);
-     const final={answer:p.answer,thinking:p.thinking,thinkingLive:false,flash:0,stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
-     streamRef.current=final;
-     setStream(final);
-     commitStream();
-     setGenerating(false);
-     genLiveRef.current=false;
+     const g=genRef.current,elapsed=Math.max(.001,(performance.now()-g.start)/1000);
+     const final={answer:g.targetAnswer||'',thinking:g.thinking||'',thinkingLive:false,flash:0,stats:g.count+' tokens · '+(g.count/elapsed).toFixed(1)+' tok/s'};
+     streamRef.current=final;setStream(final);commitStream();setGenerating(false);genLiveRef.current=false;
    });
    return()=>{tokenListener.then(x=>x.remove());doneListener.then(x=>x.remove())}
  },[commitStream]);
@@ -161,7 +138,7 @@ function App(){
  finally{setLoadingModel('')}
 }
  async function pickAndLoad(){try{const p=await Llama.pickModel();if(p?.path)await loadPath(p.path,p.name||p.path.split('/').pop())}catch(e){console.error(e);alert('Could not load the model.')}} 
- async function send(){if(genLiveRef.current)return;const text=input.trim();if(!text)return;if(!model){setScreen('models');return}const title=current.title==='New chat'?text.slice(0,42):current.title;const msgs=[...current.messages,{role:'user',content:text},{role:'assistant',content:'',thinking:''}];setChats(prev=>prev.map(c=>c.id===current.id?{...c,title,messages:msgs}:c));setInput('');const g={count:0,start:performance.now(),raw:'',targetAnswer:'',visibleAnswer:'',timer:null,trail:[]};genRef.current=g;const empty={answer:'',thinking:'',thinkingLive:false,flash:'',flashKey:0,stats:'0 tokens · 0.0 tok/s'};streamRef.current=empty;setStream(empty);scrollFollowRef.current=true;setGenerating(true);genLiveRef.current=true;const effectiveSystemPrompt=String(chatCfg.systemPrompt||'').trim()||VYRA_SYSTEM_PROMPT;try{await Llama.generate({roles:msgs.slice(0,-1).map(x=>x.role),contents:msgs.slice(0,-1).map(x=>x.content),...chatCfg,systemPrompt:effectiveSystemPrompt})}catch(e){console.error(e);setGenerating(false);genLiveRef.current=false;commitStream()}}
+ async function send(){if(genLiveRef.current)return;const text=input.trim();if(!text)return;if(!model){setScreen('models');return}const title=current.title==='New chat'?text.slice(0,42):current.title;const msgs=[...current.messages,{role:'user',content:text},{role:'assistant',content:'',thinking:''}];setChats(prev=>prev.map(c=>c.id===current.id?{...c,title,messages:msgs}:c));setInput('');const g={count:0,start:performance.now(),raw:'',targetAnswer:'',thinking:'',visibleAnswer:'',timer:null,trail:[]};genRef.current=g;const empty={answer:'',thinking:'',thinkingLive:false,flash:'',flashKey:0,stats:'0 tokens · 0.0 tok/s'};streamRef.current=empty;setStream(empty);scrollFollowRef.current=true;setGenerating(true);genLiveRef.current=true;const effectiveSystemPrompt=String(chatCfg.systemPrompt||'').trim()||VYRA_SYSTEM_PROMPT;try{await Llama.generate({roles:msgs.slice(0,-1).map(x=>x.role),contents:msgs.slice(0,-1).map(x=>x.content),...chatCfg,systemPrompt:effectiveSystemPrompt})}catch(e){console.error(e);setGenerating(false);genLiveRef.current=false;commitStream()}}
  async function pickText(){try{const r=await Llama.pickText();if(r?.text){setAttachment({name:r.name||'text.txt',text:r.text});setInput(prev=>prev?'[Arquivo: '+(r.name||'text.txt')+']\n'+r.text:r.text)}}catch(e){console.error(e);alert('Could not read the TXT file.')}}
  function newChat(){const c=makeChat();setChats(p=>[c,...p]);setChatId(c.id);setScreen('chat');setDrawer(false);setInput('');setStream({answer:'',thinking:'',thinkingLive:false,flash:'',stats:''})}
  async function unload(){try{await Llama.unloadModel()}finally{setModel('');localStorage.removeItem('pp_model');localStorage.removeItem('pp_model_path');refreshModels()}}
