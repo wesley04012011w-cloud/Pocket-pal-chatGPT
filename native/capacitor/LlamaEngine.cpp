@@ -14,7 +14,8 @@
           #include "sampling.h"
           #define TAG "PocketPalNative"
           #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR,TAG,__VA_ARGS__)
-          static llama_model*g_model=nullptr;static llama_context*g_ctx=nullptr;static common_chat_templates_ptr g_chat_templates=nullptr;static std::mutex g_mutex;static std::atomic<bool> g_stop{false};
+          static llama_model*g_model=nullptr;static llama_context*g_ctx=nullptr;static common_chat_templates_ptr g_chat_templates=nullptr;static std::mutex g_mutex;static std::atomic<bool> g_stop{false};static std::vector<llama_token> g_cached_prompt_tokens;static bool g_kv_cache_valid=false;static std::string g_kv_cache_type="f16";
+static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;if(s=="q8_0")return GGML_TYPE_Q8_0;return GGML_TYPE_F16;}
           static std::mutex g_log_mutex;static std::string g_log_path;
           static void DLOG(const std::string&s){LOGE("%s",s.c_str());std::lock_guard<std::mutex>lk(g_log_mutex);if(g_log_path.empty())return;std::ofstream f(g_log_path,std::ios::app);if(f)f<<"["<<std::time(nullptr)<<"] "<<s<<"\n";}
           static std::string js(JNIEnv*e,jstring s){if(!s)return"";const char*p=e->GetStringUTFChars(s,nullptr);std::string r=p?p:"";if(p)e->ReleaseStringUTFChars(s,p);return r;}
@@ -49,17 +50,17 @@
             if(e->ExceptionCheck()){LOGE("JNI final UTF-8 callback exception");e->ExceptionDescribe();e->ExceptionClear();return false;}return true;
           }
           extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeSetLogPath(JNIEnv*e,jclass,jstring path){std::lock_guard<std::mutex>lk(g_log_mutex);g_log_path=js(e,path);if(!g_log_path.empty()){std::ofstream f(g_log_path,std::ios::app);if(f)f<<"["<<std::time(nullptr)<<"] NATIVE LOG INITIALIZED\n";}}
-          extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeLoad(JNIEnv*e,jclass,jstring path,jint nctx,jint threads,jint bt,jint batch,jboolean flash,jboolean mmap,jboolean mlock,jboolean offloadKQV){
-           std::lock_guard<std::mutex>lk(g_mutex);DLOG("nativeLoad ENTER");g_stop=false;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}g_chat_templates.reset();if(g_model){llama_model_free(g_model);g_model=nullptr;}llama_backend_init();DLOG("nativeLoad backend initialized");
+          extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeLoad(JNIEnv*e,jclass,jstring path,jint nctx,jint threads,jint bt,jint batch,jboolean flash,jboolean mmap,jboolean mlock,jboolean offloadKQV,jstring kvCacheType){
+           std::lock_guard<std::mutex>lk(g_mutex);DLOG("nativeLoad ENTER");g_stop=false;g_kv_cache_valid=false;g_cached_prompt_tokens.clear();g_kv_cache_type=js(e,kvCacheType);if(g_kv_cache_type!="q4_0"&&g_kv_cache_type!="q8_0")g_kv_cache_type="f16";if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}g_chat_templates.reset();if(g_model){llama_model_free(g_model);g_model=nullptr;}g_kv_cache_valid=false;g_cached_prompt_tokens.clear();llama_backend_init();DLOG("nativeLoad backend initialized");
            llama_model_params mp=llama_model_default_params();mp.n_gpu_layers=0;mp.load_mode=mmap?(mlock?LLAMA_LOAD_MODE_MMAP_MLOCK:LLAMA_LOAD_MODE_MMAP):(mlock?LLAMA_LOAD_MODE_MLOCK:LLAMA_LOAD_MODE_NONE);std::string p=js(e,path);g_model=llama_model_load_from_file(p.c_str(),mp);
            if(!g_model&&mlock){mp.load_mode=mmap?LLAMA_LOAD_MODE_MMAP:LLAMA_LOAD_MODE_NONE;g_model=llama_model_load_from_file(p.c_str(),mp);}if(!g_model){DLOG("nativeLoad model load FAILED");return JNI_FALSE;}
-           llama_context_params cp=llama_context_default_params();cp.n_ctx=(uint32_t)std::max(512,(int)nctx);cp.n_batch=(uint32_t)std::max(32,(int)batch);cp.n_ubatch=std::min(cp.n_batch,512u);cp.n_threads=std::max(1,(int)threads);cp.n_threads_batch=std::max(1,(int)bt);cp.flash_attn_type=flash?LLAMA_FLASH_ATTN_TYPE_ENABLED:LLAMA_FLASH_ATTN_TYPE_DISABLED;cp.offload_kqv=offloadKQV;g_ctx=llama_init_from_model(g_model,cp);
+           llama_context_params cp=llama_context_default_params();cp.n_ctx=(uint32_t)std::max(512,(int)nctx);cp.n_batch=(uint32_t)std::max(32,(int)batch);cp.n_ubatch=std::min(cp.n_batch,512u);cp.n_threads=std::max(1,(int)threads);cp.n_threads_batch=std::max(1,(int)bt);cp.flash_attn_type=flash?LLAMA_FLASH_ATTN_TYPE_ENABLED:LLAMA_FLASH_ATTN_TYPE_DISABLED;cp.type_k=kvType(g_kv_cache_type);cp.type_v=kvType(g_kv_cache_type);cp.offload_kqv=offloadKQV;g_ctx=llama_init_from_model(g_model,cp);
            if(!g_ctx){DLOG("nativeLoad context init FAILED");llama_model_free(g_model);g_model=nullptr;return JNI_FALSE;}try{g_chat_templates=common_chat_templates_init(g_model,"");}catch(const std::exception&x){LOGE("chat template init failed: %s",x.what());llama_free(g_ctx);g_ctx=nullptr;llama_model_free(g_model);g_model=nullptr;return JNI_FALSE;}DLOG("nativeLoad SUCCESS");
            return JNI_TRUE;
           }
           extern "C" JNIEXPORT jstring JNICALL Java_dev_pocketpal_local_NativeBridge_nativeTemplate(JNIEnv*e,jclass){std::lock_guard<std::mutex>lk(g_mutex);const char*t=g_model?llama_model_chat_template(g_model,nullptr):nullptr;return e->NewStringUTF(t?t:"");}
           extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeStop(JNIEnv*,jclass){DLOG("nativeStop");g_stop=true;}
-          extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeFree(JNIEnv*,jclass){DLOG("nativeFree ENTER");std::lock_guard<std::mutex>lk(g_mutex);g_stop=true;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}g_chat_templates.reset();if(g_model){llama_model_free(g_model);g_model=nullptr;}}
+          extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeFree(JNIEnv*,jclass){DLOG("nativeFree ENTER");std::lock_guard<std::mutex>lk(g_mutex);g_stop=true;if(g_ctx){llama_free(g_ctx);g_ctx=nullptr;}g_chat_templates.reset();if(g_model){llama_model_free(g_model);g_model=nullptr;}g_kv_cache_valid=false;g_cached_prompt_tokens.clear();}
           extern "C" JNIEXPORT jboolean JNICALL Java_dev_pocketpal_local_NativeBridge_nativeGenerateChat(JNIEnv*e,jclass,jobjectArray jr,jobjectArray jc,jint maxTok,jfloat temp,jfloat topP,jint topK,jfloat minP,jfloat repeatPenalty,jint repeatLastN,jlong seed,jboolean useJinja,jboolean enableThinking,jstring jsystem,jobject cb){
            std::lock_guard<std::mutex>lk(g_mutex);DLOG("nativeGenerateChat ENTER");if(!g_model||!g_ctx||!cb){DLOG("nativeGenerateChat invalid state");return JNI_FALSE;}g_stop=false;jclass cls=e->GetObjectClass(cb);jmethodID mid=e->GetMethodID(cls,"emit","(Ljava/lang/String;Z)V");if(!mid){e->DeleteLocalRef(cls);return JNI_FALSE;}
            try{
@@ -67,11 +68,21 @@
             for(jsize i=0;i<n;i++){jstring r=(jstring)e->GetObjectArrayElement(jr,i),c=(jstring)e->GetObjectArrayElement(jc,i);common_chat_msg m;m.role=js(e,r);m.content=js(e,c);msgs.push_back(m);e->DeleteLocalRef(r);e->DeleteLocalRef(c);}
             common_chat_templates_inputs in;in.messages=msgs;in.add_generation_prompt=true;in.use_jinja=useJinja;in.enable_thinking=enableThinking;in.reasoning_format=COMMON_REASONING_FORMAT_DEEPSEEK;
             common_chat_params formatted=common_chat_templates_apply(g_chat_templates.get(),in);if(formatted.prompt.empty())return JNI_FALSE;const llama_vocab*v=llama_model_get_vocab(g_model);std::vector<llama_token>toks=common_tokenize(v,formatted.prompt,true,true);if(toks.empty())return JNI_FALSE;if((int)toks.size()+2>=(int)llama_n_ctx(g_ctx))return JNI_FALSE;
-            llama_memory_t mem=llama_get_memory(g_ctx);if(mem)llama_memory_clear(mem,true);
+            llama_memory_t mem=llama_get_memory(g_ctx);
+            size_t commonPrefix=0;
+            if(mem&&g_kv_cache_valid){
+              commonPrefix=std::min(g_cached_prompt_tokens.size(),toks.size());
+              while(commonPrefix>0&&g_cached_prompt_tokens[commonPrefix-1]!=toks[commonPrefix-1])commonPrefix--;
+              if(commonPrefix>0)llama_memory_seq_rm(mem,0,(llama_pos)commonPrefix,-1);
+              else llama_memory_clear(mem,true);
+            }else if(mem)llama_memory_clear(mem,true);
+            if(g_kv_cache_valid&&commonPrefix==toks.size()&&toks.size()>0){
+              // The retained prompt already owns the correct logits; no prompt prefill is needed.
+            }
             common_params_sampling sp;sp.seed=seed<0?LLAMA_DEFAULT_SEED:(uint32_t)seed;sp.temp=std::max(0.0f,(float)temp);sp.top_p=std::clamp((float)topP,0.0f,1.0f);sp.top_k=std::max(0,(int)topK);sp.min_p=std::clamp((float)minP,0.0f,1.0f);sp.penalty_repeat=std::max(1.0f,(float)repeatPenalty);sp.penalty_last_n=std::max(0,(int)repeatLastN);sp.samplers={COMMON_SAMPLER_TYPE_PENALTIES,COMMON_SAMPLER_TYPE_TOP_K,COMMON_SAMPLER_TYPE_TOP_P,COMMON_SAMPLER_TYPE_MIN_P,COMMON_SAMPLER_TYPE_TEMPERATURE};common_sampler*smp=common_sampler_init(g_model,sp);if(!smp)return JNI_FALSE;
             llama_batch b=llama_batch_init((int32_t)std::min((size_t)llama_n_batch(g_ctx),toks.size()),0,1);int pos=0;bool ok=true;
-            for(size_t off=0;off<toks.size()&&!g_stop;){common_batch_clear(b);int take=(int)std::min((size_t)llama_n_batch(g_ctx),toks.size()-off);for(int i=0;i<take;i++)common_batch_add(b,toks[off+i],pos++,{0},off+i+1==toks.size());if(llama_decode(g_ctx,b)!=0){ok=false;break;}off+=take;}
-            if(!ok){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}
+            for(size_t off=commonPrefix;off<toks.size()&&!g_stop;){common_batch_clear(b);int take=(int)std::min((size_t)llama_n_batch(g_ctx),toks.size()-off);for(int i=0;i<take;i++)common_batch_add(b,toks[off+i],pos++,{0},off+i+1==toks.size());if(llama_decode(g_ctx,b)!=0){ok=false;break;}off+=take;}
+            if(!ok){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}g_cached_prompt_tokens=toks;g_kv_cache_valid=true;
             if(g_stop){llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;}
             enum class EndReason { EOG, STOP, LIMIT, CALLBACK, DECODE_ERROR };
             EndReason reason=EndReason::LIMIT;std::string utf8Pending;
