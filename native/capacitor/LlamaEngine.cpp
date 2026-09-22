@@ -19,7 +19,7 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
           static std::mutex g_log_mutex;static std::string g_log_path;
           static void DLOG(const std::string&s){LOGE("%s",s.c_str());std::lock_guard<std::mutex>lk(g_log_mutex);if(g_log_path.empty())return;std::ofstream f(g_log_path,std::ios::app);if(f)f<<"["<<std::time(nullptr)<<"] "<<s<<"\n";}
           static std::string js(JNIEnv*e,jstring s){if(!s)return"";const char*p=e->GetStringUTFChars(s,nullptr);std::string r=p?p:"";if(p)e->ReleaseStringUTFChars(s,p);return r;}
-          static bool emit(JNIEnv*e,jobject cb,jmethodID mid,const std::string&s,std::string&pending){
+          static bool emit(JNIEnv*e,jobject cb,jmethodID mid,const std::string&s,std::string&pending,bool thinking=false){
             pending+=s;std::u16string out;size_t i=0;
             while(i<pending.size()){
               const unsigned char c=(unsigned char)pending[i];uint32_t cp=0;int n=0;
@@ -40,13 +40,13 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
             if(i)pending.erase(0,i);
             if(out.empty())return true;
             jstring x=e->NewString(reinterpret_cast<const jchar*>(out.data()),(jsize)out.size());if(!x)return false;
-            e->CallVoidMethod(cb,mid,x,JNI_FALSE);e->DeleteLocalRef(x);
+            e->CallVoidMethod(cb,mid,x,thinking?JNI_TRUE:JNI_FALSE);e->DeleteLocalRef(x);
             if(e->ExceptionCheck()){LOGE("JNI token callback exception");e->ExceptionDescribe();e->ExceptionClear();return false;}return true;
           }
-          static bool flushUtf8(JNIEnv*e,jobject cb,jmethodID mid,std::string&pending){
+          static bool flushUtf8(JNIEnv*e,jobject cb,jmethodID mid,std::string&pending,bool thinking=false){
             if(pending.empty())return true;std::u16string out;out.push_back((char16_t)0xFFFD);pending.clear();
             jstring x=e->NewString(reinterpret_cast<const jchar*>(out.data()),1);if(!x)return false;
-            e->CallVoidMethod(cb,mid,x,JNI_FALSE);e->DeleteLocalRef(x);
+            e->CallVoidMethod(cb,mid,x,thinking?JNI_TRUE:JNI_FALSE);e->DeleteLocalRef(x);
             if(e->ExceptionCheck()){LOGE("JNI final UTF-8 callback exception");e->ExceptionDescribe();e->ExceptionClear();return false;}return true;
           }
           extern "C" JNIEXPORT void JNICALL Java_dev_pocketpal_local_NativeBridge_nativeSetLogPath(JNIEnv*e,jclass,jstring path){std::lock_guard<std::mutex>lk(g_log_mutex);g_log_path=js(e,path);if(!g_log_path.empty()){std::ofstream f(g_log_path,std::ios::app);if(f)f<<"["<<std::time(nullptr)<<"] NATIVE LOG INITIALIZED\n";}}
@@ -85,6 +85,54 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
             if(!ok){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}g_cached_prompt_tokens=toks;g_kv_cache_valid=true;
             if(g_stop){llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;}
             enum class EndReason { EOG, STOP, LIMIT, CALLBACK, DECODE_ERROR };
+            struct ReasoningStream {
+              bool enabled=false,active=false,finished=false;
+              std::string start,pending;
+              std::vector<std::string> ends;
+            } reasoning;
+            reasoning.enabled=enableThinking&&formatted.supports_thinking&&!formatted.thinking_end_tags.empty();
+            reasoning.start=formatted.thinking_start_tag;
+            reasoning.ends=formatted.thinking_end_tags;
+            reasoning.active=reasoning.enabled&&reasoning.start.empty();
+            auto feedReasoning=[&](const std::string&piece)->bool{
+              if(!reasoning.enabled)return emit(e,cb,mid,piece,utf8Pending,false);
+              reasoning.pending+=piece;
+              while(true){
+                if(reasoning.finished){
+                  if(!reasoning.pending.empty()&&!emit(e,cb,mid,reasoning.pending,utf8Pending,false))return false;
+                  reasoning.pending.clear();return true;
+                }
+                if(!reasoning.active){
+                  const size_t p=reasoning.pending.find(reasoning.start);
+                  if(p==std::string::npos){
+                    const size_t keep=reasoning.start.empty()?0:reasoning.start.size()-1;
+                    if(reasoning.pending.size()>keep){
+                      const size_t safe=reasoning.pending.size()-keep;
+                      if(!emit(e,cb,mid,reasoning.pending.substr(0,safe),utf8Pending,false))return false;
+                      reasoning.pending.erase(0,safe);
+                    }
+                    return true;
+                  }
+                  if(p>0&&!emit(e,cb,mid,reasoning.pending.substr(0,p),utf8Pending,false))return false;
+                  reasoning.pending.erase(0,p+reasoning.start.size());
+                  reasoning.active=true;continue;
+                }
+                size_t endPos=std::string::npos,endLen=0;
+                for(const auto&end:reasoning.ends){if(end.empty())continue;const size_t p=reasoning.pending.find(end);if(p!=std::string::npos&&(endPos==std::string::npos||p<endPos)){endPos=p;endLen=end.size();}}
+                if(endPos!=std::string::npos){
+                  if(!emit(e,cb,mid,reasoning.pending.substr(0,endPos),utf8Pending,true))return false;
+                  reasoning.pending.erase(0,endPos+endLen);reasoning.active=false;reasoning.finished=true;continue;
+                }
+                size_t maxEnd=1;for(const auto&end:reasoning.ends)maxEnd=std::max(maxEnd,end.size());
+                const size_t keep=maxEnd-1;
+                if(reasoning.pending.size()>keep){
+                  const size_t safe=reasoning.pending.size()-keep;
+                  if(!emit(e,cb,mid,reasoning.pending.substr(0,safe),utf8Pending,true))return false;
+                  reasoning.pending.erase(0,safe);
+                }
+                return true;
+              }
+            };
             EndReason reason=EndReason::LIMIT;std::string utf8Pending;
             for(int step=0;step<std::max(1,(int)maxTok);step++){
               if(g_stop){reason=EndReason::STOP;break;}
@@ -97,12 +145,16 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
               }
               common_sampler_accept(smp,tok,true);
               std::string piece=common_token_to_piece(v,tok,true);
-              if(!piece.empty()&&!emit(e,cb,mid,piece,utf8Pending)){reason=EndReason::CALLBACK;break;}
+              if(!piece.empty()&&!feedReasoning(piece)){reason=EndReason::CALLBACK;break;}
               common_batch_clear(b);
               common_batch_add(b,tok,pos++,{0},true);
               if(llama_decode(g_ctx,b)!=0){reason=EndReason::DECODE_ERROR;break;}
             }
-            if(!utf8Pending.empty()&&!flushUtf8(e,cb,mid,utf8Pending)){reason=EndReason::CALLBACK;}
+            if(reasoning.enabled&&!reasoning.pending.empty()){
+              if(!emit(e,cb,mid,reasoning.pending,utf8Pending,reasoning.active&&!reasoning.finished))reason=EndReason::CALLBACK;
+              reasoning.pending.clear();
+            }
+            if(!utf8Pending.empty()&&!flushUtf8(e,cb,mid,utf8Pending,reasoning.active&&!reasoning.finished)){reason=EndReason::CALLBACK;}
             DLOG(std::string("generation: terminal cleanup begin reason=")+
                  (reason==EndReason::EOG?"EOG":
                   reason==EndReason::STOP?"STOP":
