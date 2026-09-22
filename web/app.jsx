@@ -92,7 +92,7 @@ function App(){
    const el=thinkingRef.current;if(!el)return;
    el.scrollTop=el.scrollHeight;
  },[stream.thinking]);
- useEffect(()=>{localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_engine_settings',JSON.stringify(engineCfg));localStorage.setItem('pp_chat_settings',JSON.stringify(chatCfg));localStorage.setItem('pp_ui_theme',uiTheme);localStorage.setItem('pp_performance_mode',performanceMode?'1':'0')},[chats,engineCfg,chatCfg,uiTheme]);
+ useEffect(()=>{localStorage.setItem('pp_chats',JSON.stringify(chats));localStorage.setItem('pp_engine_settings',JSON.stringify(engineCfg));localStorage.setItem('pp_chat_settings',JSON.stringify(chatCfg));localStorage.setItem('pp_ui_theme',uiTheme);localStorage.setItem('pp_performance_mode',performanceMode?'1':'0')},[chats,engineCfg,chatCfg,uiTheme,performanceMode]);
  useEffect(()=>{const t=setTimeout(()=>setLoading(false),520);return()=>clearTimeout(t)},[]);
  const patchCurrent=useCallback(fn=>setChats(prev=>prev.map(c=>c.id===chatIdRef.current?fn(c):c)),[]);
  const refreshModels=useCallback(async()=>{try{const r=await Llama.listModels();setDownloaded(r?.models||[])}catch{}},[]);
@@ -179,7 +179,7 @@ function App(){
     <div className="composer"><div className="input-row"><button className="icon" onClick={pickText} aria-label="Attach TXT file"><Icon name="plus"/></button><textarea className="input" rows="1" value={input} onChange={e=>{setInput(e.target.value);e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,145)+'px'}} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}}} placeholder="Ask assistant..."/><button className={'send '+(generating?'stop':'')} onClick={()=>generating?Llama.stop():send()} aria-label={generating?'Stop':'Send'}><Icon name={generating?'stop':'send'}/></button></div><div className="meta stats">{stream.stats}</div></div>
    </div>
   </main>}
-  {settingsOpen&&<EngineSettings cfg={engineCfg} theme={uiTheme} onThemeChange={setUiTheme} onClose={()=>setSettingsOpen(false)} onApply={next=>{setEngineCfg(next);setSettingsOpen(false)}} onLogs={()=>Llama.exportLog()}/>} {chatSettingsOpen&&<ChatSettings cfg={chatCfg} onClose={()=>setChatSettingsOpen(false)} onApply={next=>{setChatCfg(next);setChatSettingsOpen(false)}}/>}
+  {settingsOpen&&<EngineSettings cfg={engineCfg} theme={uiTheme} performanceMode={performanceMode} onPerformanceChange={setPerformanceMode} onThemeChange={setUiTheme} onClose={()=>setSettingsOpen(false)} onApply={next=>{setEngineCfg(next);setSettingsOpen(false)}} onLogs={()=>Llama.exportLog()}/>} {chatSettingsOpen&&<ChatSettings cfg={chatCfg} onClose={()=>setChatSettingsOpen(false)} onApply={next=>{setChatCfg(next);setChatSettingsOpen(false)}}/>}
  </div>
 }
 
@@ -212,12 +212,12 @@ function ChatSettings({cfg,onClose,onApply}){
  <footer className="settings-footer"><button onClick={onClose}>Cancel</button><button className="primary" onClick={()=>onApply(v)}>Apply changes</button></footer></div>
 }
 
-function EngineSettings({cfg,theme,onThemeChange,onClose,onApply,onLogs}){
+function EngineSettings({cfg,theme,performanceMode,onPerformanceChange,onThemeChange,onClose,onApply,onLogs}){
  const [v,setV]=useState({...cfg});
  return <div className="settings-page"><header className="settings-head"><button className="float-btn" onClick={onClose}><Icon name="back"/></button><div><b>Settings</b><small>Engine, memory and CPU</small></div></header>
  <div className="settings-content">
   <section className="settings-section theme-settings"><h3>Interface</h3>
-   <div className="setting-row performance-setting"><span><b>Performance mode</b><small>Reduces visual effects, blur and animation to keep long generations smooth.</small></span><Toggle value={performanceMode} onChange={setPerformanceMode} label="Performance mode"/></div>
+   <div className="setting-row performance-setting"><span><b>Performance mode</b><small>Reduces visual effects, blur and animation to keep long generations smooth.</small></span><Toggle value={performanceMode} onChange={onPerformanceChange} label="Performance mode"/></div>
    <div className="theme-choice"><button className={theme==='chat'?'selected':''} onClick={()=>onThemeChange('chat')}><b>Chat</b><small>Clean and minimal interface.</small></button><button className={theme==='vyra'?'selected':''} onClick={()=>onThemeChange('vyra')}><b>VYRA</b><small>Full visual style and atmosphere.</small></button><button className={theme==='immersive'?'selected':''} onClick={()=>onThemeChange('immersive')}><b>Immersive</b><small>Gray and blue tones with a calmer atmosphere.</small></button></div>
   </section>
   <section className="settings-section"><h3>Engine</h3>
