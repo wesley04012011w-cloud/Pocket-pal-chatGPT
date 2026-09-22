@@ -71,8 +71,8 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
             llama_memory_t mem=llama_get_memory(g_ctx);
             size_t commonPrefix=0;
             if(mem&&g_kv_cache_valid){
-              commonPrefix=std::min(g_cached_prompt_tokens.size(),toks.size());
-              while(commonPrefix>0&&g_cached_prompt_tokens[commonPrefix-1]!=toks[commonPrefix-1])commonPrefix--;
+              const size_t maxPrefix=std::min(g_cached_prompt_tokens.size(),toks.size());
+              while(commonPrefix<maxPrefix&&g_cached_prompt_tokens[commonPrefix]==toks[commonPrefix])commonPrefix++;
               if(commonPrefix>0)llama_memory_seq_rm(mem,0,(llama_pos)commonPrefix,-1);
               else llama_memory_clear(mem,true);
             }else if(mem)llama_memory_clear(mem,true);
@@ -80,7 +80,7 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
               // The retained prompt already owns the correct logits; no prompt prefill is needed.
             }
             common_params_sampling sp;sp.seed=seed<0?LLAMA_DEFAULT_SEED:(uint32_t)seed;sp.temp=std::max(0.0f,(float)temp);sp.top_p=std::clamp((float)topP,0.0f,1.0f);sp.top_k=std::max(0,(int)topK);sp.min_p=std::clamp((float)minP,0.0f,1.0f);sp.penalty_repeat=std::max(1.0f,(float)repeatPenalty);sp.penalty_last_n=std::max(0,(int)repeatLastN);sp.samplers={COMMON_SAMPLER_TYPE_PENALTIES,COMMON_SAMPLER_TYPE_TOP_K,COMMON_SAMPLER_TYPE_TOP_P,COMMON_SAMPLER_TYPE_MIN_P,COMMON_SAMPLER_TYPE_TEMPERATURE};common_sampler*smp=common_sampler_init(g_model,sp);if(!smp)return JNI_FALSE;
-            llama_batch b=llama_batch_init((int32_t)std::min((size_t)llama_n_batch(g_ctx),toks.size()),0,1);int pos=0;bool ok=true;
+            llama_batch b=llama_batch_init((int32_t)std::max<size_t>(1,std::min((size_t)llama_n_batch(g_ctx),toks.size()-commonPrefix)),0,1);int pos=(int)commonPrefix;bool ok=true;
             for(size_t off=commonPrefix;off<toks.size()&&!g_stop;){common_batch_clear(b);int take=(int)std::min((size_t)llama_n_batch(g_ctx),toks.size()-off);for(int i=0;i<take;i++)common_batch_add(b,toks[off+i],pos++,{0},off+i+1==toks.size());if(llama_decode(g_ctx,b)!=0){ok=false;break;}off+=take;}
             if(!ok){llama_batch_free(b);common_sampler_free(smp);return JNI_FALSE;}g_cached_prompt_tokens=toks;g_kv_cache_valid=true;
             if(g_stop){llama_batch_free(b);common_sampler_free(smp);return JNI_TRUE;}
