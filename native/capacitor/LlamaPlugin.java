@@ -132,13 +132,13 @@ public class LlamaPlugin extends Plugin {
       }
       Diagnostic.log("MODEL profile bytes="+modelBytes+" requestedContext="+requestedContext+" context="+context+" requestedBatch="+requestedBatch+" batch="+batch+" avail="+mi.availMem+" low="+mi.lowMemory);
     }
-    boolean flash=call.getBoolean("flashAttention",true),mmap=call.getBoolean("mmap",true),mlock=call.getBoolean("mlock",false),offloadKQV=call.getBoolean("offloadKQV",false);
+    boolean flash=call.getBoolean("flashAttention",true),mmap=call.getBoolean("mmap",true),mlock=call.getBoolean("mlock",false),offloadKQV=call.getBoolean("offloadKQV",false);String kvCacheType=call.getString("kvCacheType","f16");if(!"q4_0".equals(kvCacheType)&&!"q8_0".equals(kvCacheType)&&!"f16".equals(kvCacheType))kvCacheType="f16";
     final String loadPath=path;
     final int loadContext=context,loadThreads=threads,loadBatchThreads=bt,loadBatch=batch;
-    final boolean loadFlash=flash,loadMmap=mmap,loadMlock=mlock,loadOffloadKQV=offloadKQV;
+    final boolean loadFlash=flash,loadMmap=mmap,loadMlock=mlock,loadOffloadKQV=offloadKQV;final String loadKvCacheType=kvCacheType;
     Executors.newSingleThreadExecutor().execute(()->{
       Diagnostic.log("MODEL load start path="+loadPath+" context="+loadContext+" batch="+loadBatch);
-      boolean ok=NativeBridge.nativeLoad(loadPath,loadContext,loadThreads,loadBatchThreads,loadBatch,loadFlash,loadMmap,loadMlock,loadOffloadKQV);
+      boolean ok=NativeBridge.nativeLoad(loadPath,loadContext,loadThreads,loadBatchThreads,loadBatch,loadFlash,loadMmap,loadMlock,loadOffloadKQV,loadKvCacheType);
       Diagnostic.log("MODEL load result="+ok);
       JSObject r=new JSObject();r.put("ok",ok);if(ok)r.put("name",new File(path).getName());call.resolve(r);
     });
