@@ -93,7 +93,11 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
             reasoning.enabled=enableThinking&&formatted.supports_thinking&&!formatted.thinking_end_tags.empty();
             reasoning.start=formatted.thinking_start_tag;
             reasoning.ends=formatted.thinking_end_tags;
-            reasoning.active=reasoning.enabled&&(reasoning.start.empty()||(!formatted.generation_prompt.empty()&&formatted.generation_prompt.size()>=reasoning.start.size()&&formatted.generation_prompt.rfind(reasoning.start)==formatted.generation_prompt.size()-reasoning.start.size()));
+            // Some thinking fine-tunes intentionally omit an opening <think> marker.
+            // When thinking is enabled and the template declares reasoning support,
+            // generated text starts in the reasoning phase and only switches to the
+            // answer phase when a thinking end marker is emitted.
+            reasoning.active=reasoning.enabled;
             std::string utf8Pending;
             auto feedReasoning=[&](const std::string&piece)->bool{
               if(!reasoning.enabled)return emit(e,cb,mid,piece,utf8Pending,false);
