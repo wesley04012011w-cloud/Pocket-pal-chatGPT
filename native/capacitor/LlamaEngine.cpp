@@ -73,8 +73,16 @@ static ggml_type kvType(const std::string&s){if(s=="q4_0")return GGML_TYPE_Q4_0;
             if(mem&&g_kv_cache_valid){
               const size_t maxPrefix=std::min(g_cached_prompt_tokens.size(),toks.size());
               while(commonPrefix<maxPrefix&&g_cached_prompt_tokens[commonPrefix]==toks[commonPrefix])commonPrefix++;
-              if(commonPrefix>0)llama_memory_seq_rm(mem,0,(llama_pos)commonPrefix,-1);
-              else llama_memory_clear(mem,true);
+              if(commonPrefix>0){
+                // Keep the shared prompt prefix and discard the previous generation.
+                // seq_rm removes positions in [p0, p1), so the old code was
+                // accidentally deleting the prefix instead of everything after it.
+                if(!llama_memory_seq_rm(mem,0,(llama_pos)commonPrefix,-1)){
+                  DLOG("generation: KV prefix trim failed; clearing KV cache");
+                  llama_memory_clear(mem,true);
+                  commonPrefix=0;
+                }
+              }else llama_memory_clear(mem,true);
             }else if(mem)llama_memory_clear(mem,true);
             if(g_kv_cache_valid&&commonPrefix==toks.size()&&toks.size()>0){
               // The retained prompt already owns the correct logits; no prompt prefill is needed.
