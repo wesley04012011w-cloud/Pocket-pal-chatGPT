@@ -156,7 +156,7 @@ public class LlamaPlugin extends Plugin {
     Executors.newSingleThreadExecutor().execute(()->{
       Diagnostic.log("GENERATION start");
       NativeBridge.TokenCallback cb=(text,done)->{
-        JSObject e=new JSObject();e.put("text",text);e.put("done",done);notifyListeners("token",e);
+        JSObject e=new JSObject();e.put("text",text);e.put("thinking",done);notifyListeners("token",e);
       };
       boolean ok=NativeBridge.nativeGenerateChat(roles,contents,max,temp,topP,topK,minP,repeatPenalty,repeatLastN,seed,jinja,thinking,sys,cb);
       Diagnostic.log("GENERATION return ok="+ok);
